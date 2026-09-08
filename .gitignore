@@ -1,0 +1,25 @@
+# 敏感数据 - 绝不提交
+portfolio.db
+portfolio_duizhang.db
+*.db
+*.db-journal
+bridge.token
+*.token
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+
+# 数据文件
+daily_position.json
+daily_market_value.json
+viz_data.json
+*.xlsx
+*.xls
+
+# 系统
+.DS_Store
+Thumbs.db

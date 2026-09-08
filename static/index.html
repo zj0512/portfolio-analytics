@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>投资组合分析工具</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+ body{font-family:'Microsoft YaHei',sans-serif;margin:0;padding:20px;background:#f5f6fa;color:#333}
+ h1{font-size:22px;margin:0 0 6px}
+ .sub{color:#888;font-size:13px;margin-bottom:16px}
+ .card{background:#fff;border-radius:10px;padding:16px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+ .chart{width:100%;height:400px}
+ .info{display:flex;gap:24px;flex-wrap:wrap;margin-bottom:4px}
+ .info div{font-size:13px;color:#555}
+ .info b{font-size:20px;color:#c0392b;display:block}
+ /* 输入窗口 */
+ .form{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:10px}
+ .form label{font-size:12px;color:#888;display:block;margin-bottom:3px}
+ .form select,.form input,.form button{padding:8px;font-size:14px;border:1px solid #ddd;border-radius:6px;width:100%;box-sizing:border-box}
+ .form button{background:#c0392b;color:#fff;border:none;cursor:pointer;font-weight:bold}
+ .form button:hover{background:#a93226}
+ .btn-refresh{background:#2980b9;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:14px;margin-top:8px}
+ .btn-refresh:hover{background:#1f6aa5}
+ /* 基金按钮 */
+ .funds{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+ .fund-btn{padding:6px 12px;border:1px solid #ddd;border-radius:20px;cursor:pointer;font-size:13px;background:#fff}
+ .fund-btn.active{background:#c0392b;color:#fff;border-color:#c0392b}
+</style>
+</head>
+<body>
+<h1>投资组合分析工具</h1>
+<div class="sub">本地Web应用 · Python + SQLite · 日年化(XIRR) · 可演进</div>
+
+<div class="card">
+  <div class="info" id="info">加载中...</div>
+</div>
+
+<div class="card">
+  <div style="margin-bottom:8px"><b>整体日年化(XIRR)</b></div>
+  <div class="chart" id="overall"></div>
+</div>
+
+<div class="card">
+  <div style="margin-bottom:8px"><b>持仓市值走势</b></div>
+  <div class="chart" id="mv"></div>
+</div>
+
+<div class="card">
+  <div style="margin-bottom:8px"><b>单只基金</b> <span style="color:#888;font-size:12px">点击按钮切换</span></div>
+  <div class="funds" id="funds"></div>
+  <div class="chart" id="fund"></div>
+</div>
+
+<div class="card">
+  <div style="margin-bottom:8px"><b>录入持仓变化</b> <span style="color:#888;font-size:12px">提交后自动重算曲线</span></div>
+  <div class="form">
+    <div><label>日期</label><input id="f_date" type="date" value="2026-09-08"></div>
+    <div><label>标的</label><select id="f_code"></select></div>
+    <div><label>操作</label><select id="f_action"><option value="BUY">买入</option><option value="SELL">卖出</option></select></div>
+    <div><label>数量</label><input id="f_qty" type="number" min="1" placeholder="股数/份数"></div>
+    <div><label>价格(可选)</label><input id="f_price" type="number" step="0.0001" placeholder="成交价"></div>
+    <div style="display:flex;align-items:flex-end"><button id="btn_submit">提交</button></div>
+  </div>
+  <button class="btn-refresh" id="btn_refresh">刷新曲线</button>
+  <div id="msg" style="font-size:12px;color:#27ae60;margin-top:6px"></div>
+</div>
+
+<script>
+let FUNDS = {};
+let overallChart, mvChart, fundChart;
+
+function loadFunds(data){
+  FUNDS = data.funds;
+  const sel = document.getElementById('f_code');
+  sel.innerHTML='';
+  Object.keys(FUNDS).forEach(code=>{
+    const o=document.createElement('option'); o.value=code; o.textContent=FUNDS[code]+' ('+code+')';
+    sel.appendChild(o);
+  });
+  buildFundButtons();
+}
+
+function buildFundButtons(){
+  const container = document.getElementById('funds');
+  container.innerHTML='';
+  Object.keys(FUNDS).forEach(code=>{
+    const b = document.createElement('div');
+    b.className='fund-btn'; b.textContent=FUNDS[code]; b.dataset.code=code;
+    b.onclick = ()=>renderFund(code);
+    container.appendChild(b);
+  });
+}
+
+function renderAll(data){
+  const daily = data.daily;
+  const xs = daily.map(o=>o.d);
+  const xirr = daily.map(o=>o.xirr==null?null:o.xirr);
+  const mv = daily.map(o=>o.mv);
+  // 信息栏
+  const last = daily[daily.length-1];
+  document.getElementById('info').innerHTML =
+    '<div>期末<b>'+last.d+'</b></div>'+
+    '<div>当前市值<b>'+(last.mv/10000).toFixed(1)+'万</b></div>'+
+    '<div>日年化<b>'+(last.xirr==null?'—':last.xirr+'%')+'</b></div>'+
+    '<div>样本天数<b>'+daily.length+'</b></div>';
+  // 整体年化
+  if(!overallChart) overallChart=echarts.init(document.getElementById('overall'));
+  overallChart.setOption({
+    tooltip:{trigger:'axis'}, grid:{left:60,right:30,top:40,bottom:50},
+    xAxis:{type:'category',data:xs,axisLabel:{rotate:45,fontSize:10},boundaryGap:false},
+    yAxis:{type:'value',name:'年化%',axisLabel:{formatter:'{value}%'}},
+    series:[{name:'日年化',type:'line',smooth:true,symbol:'none',data:xirr,lineStyle:{width:2,color:'#c0392b'},areaStyle:{color:'#c0392b',opacity:0.12}}]
+  });
+  // 市值
+  if(!mvChart) mvChart=echarts.init(document.getElementById('mv'));
+  mvChart.setOption({
+    tooltip:{trigger:'axis'}, grid:{left:80,right:30,top:40,bottom:50},
+    xAxis:{type:'category',data:xs,axisLabel:{rotate:45,fontSize:10},boundaryGap:false},
+    yAxis:{type:'value',name:'市值',axisLabel:{formatter:v=>(v/10000).toFixed(0)+'万'}},
+    series:[{name:'持仓市值',type:'line',smooth:true,symbol:'none',data:mv,lineStyle:{width:2,color:'#2980b9'},areaStyle:{color:'#2980b9',opacity:0.1}}]
+  });
+  window.addEventListener('resize',()=>{overallChart.resize();mvChart.resize();});
+}
+
+async function fetchAndRender(){
+  const r = await fetch('/api/daily');
+  const data = await r.json();
+  loadFunds(data);
+  renderAll(data);
+  renderFund(Object.keys(FUNDS)[0]);
+}
+
+async function renderFund(code){
+  if(!code) return;
+  document.querySelectorAll('.fund-btn').forEach(x=>x.classList.toggle('active', x.dataset.code===code));
+  const d = await fetch('/api/fund_xirr?code='+code).then(r=>r.json());
+  if(!fundChart) fundChart=echarts.init(document.getElementById('fund'));
+  const series = d.series||[];
+  const days = series.map(p=>p.d);
+  const xirr = series.map(p=>p.xirr==null?null:p.xirr);
+  const title = (d.name||code)+' 个人年化(XIRR)';
+  fundChart.setOption({
+    title:{text:title,left:'center',textStyle:{fontSize:15}},
+    tooltip:{trigger:'axis',formatter:function(ps){const p=ps[0];return p.name+'<br/>个人年化:'+p.value.toFixed(2)+'%';}},
+    grid:{left:60,right:30,top:50,bottom:50},
+    xAxis:{type:'category',data:days,axisLabel:{rotate:45,fontSize:10},boundaryGap:false},
+    yAxis:{type:'value',name:'年化%',axisLabel:{formatter:'{value}%'}},
+    series:[{name:'个人年化',type:'line',smooth:true,symbol:'none',data:xirr,lineStyle:{width:1.5,color:'#27ae60'},areaStyle:{color:'#27ae60',opacity:0.1}}]
+  });
+  window.addEventListener('resize',()=>fundChart.resize());
+}
+
+async function fetchNav(code){
+  // 从daily数据里取该基金每日单位净值(简化: 用持仓市值/数量, 若无则按市值)
+  const r = await fetch('/api/nav?code='+code);
+  const d = await r.json();
+  return d.series||[];
+}
+
+// 提交持仓变化
+document.getElementById('btn_submit').onclick = async ()=>{
+  const body = {
+    date: document.getElementById('f_date').value,
+    code: document.getElementById('f_code').value,
+    action: document.getElementById('f_action').value,
+    qty: parseFloat(document.getElementById('f_qty').value),
+    price: document.getElementById('f_price').value?parseFloat(document.getElementById('f_price').value):null,
+  };
+  const r = await fetch('/api/holding',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d = await r.json();
+  document.getElementById('msg').textContent = '已提交: '+JSON.stringify(d.received||d);
+};
+document.getElementById('btn_refresh').onclick = fetchAndRender;
+
+fetchAndRender();
+</script>
+</body>
+</html>
