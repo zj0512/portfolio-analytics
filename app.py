@@ -88,7 +88,8 @@ def get_nav(code, fsrq):
     return rows[idx][1] if idx >= 0 else None
 
 def xirr(cfs, end_date, end_val, min_days=30):
-    """资金加权年化. 时间太短(<min_days天)返回None避免失真。"""
+    """资金加权年化. 时间太短(<min_days天)返回None避免失真。
+    预计算每笔现金流的年份偏移(相对t0), 避免每次npv重复转日期, 大幅提速。"""
     if len(cfs) == 0: return None
     allcf = cfs + [(end_date, end_val)]
     t0 = min(c[0] for c in allcf)
@@ -96,15 +97,19 @@ def xirr(cfs, end_date, end_val, min_days=30):
     dN = datetime.date(int(end_date[0:4]), int(end_date[5:7]), int(end_date[8:10]))
     if (dN - d0).days < min_days:
         return None
+    # 预计算年份偏移
+    def yoff(ds):
+        d = datetime.date(int(ds[0:4]), int(ds[5:7]), int(ds[8:10]))
+        return (d - d0).days / 365.0
+    amts = [(amt, yoff(ds)) for ds, amt in allcf]
     def npv(r):
         s = 0.0
-        for ds, amt in allcf:
-            d = datetime.date(int(ds[0:4]), int(ds[5:7]), int(ds[8:10]))
-            yrs = (d - d0).days / 365.0
+        for amt, yrs in amts:
             s += amt / ((1 + r) ** yrs)
         return s
     lo, hi = -0.99, 10.0
-    for _ in range(400):
+    # 稀疏采样直到间隔足够小(约40次迭代足够, 原400次浪费)
+    for _ in range(60):
         mid = (lo + hi) / 2
         if npv(mid) > 0: lo = mid
         else: hi = mid
@@ -145,28 +150,64 @@ def compute_daily():
             recs.append((hd_fmt, hcode, est_price, hq, hq * est_price if est_price else 1.0))
     conn.close()
     recs.sort(key=lambda x: (x[0], x[1]))
-    dates = sorted(set(r[0] for r in recs))
-    # 逐日市值 + XIRR
+    # 日期序列延伸到净值库最新交易日: 从首笔交易日起, 取所有净值日
+    # 这样没交易的日子, 持仓不变但市值随净值每天更新, 曲线延伸到最新
+    nav_conn = sqlite3.connect(DB)
+    nav_cur = nav_conn.cursor()
+    all_dates = [r[0] for r in nav_cur.execute("SELECT DISTINCT fsrq FROM fund_nav ORDER BY fsrq")]
+    nav_conn.close()
+    if recs:
+        first_trade = recs[0][0]
+        dates = [d for d in all_dates if d >= first_trade]
+    else:
+        dates = all_dates
+    # 逐日市值 + XIRR (优化: 增量维护持仓, 预建净值索引, 避免O(n^2)重放)
+    # 建立 交易日->当日晚到变更 的索引
+    from collections import defaultdict
+    trade_by_date = defaultdict(list)
+    for d, code, pv, q, o in recs:
+        trade_by_date[d].append((code, pv, q, o))
+    # 预建净值: 每个代码的 (fsrq->dwjz) 有序列表, 用指针向前推进而非每次二分
+    nav_idx = {c: _nav_sorted[c] for c in CORE}
+    nav_ptr = {c: 0 for c in CORE}  # 指向 <= 当前日期 的最后一个
+
+    def nav_for(code, dd):
+        rows = nav_idx[code]
+        p = nav_ptr[code]
+        # 向前推进指针到 <= dd 的最后一个
+        while p + 1 < len(rows) and rows[p + 1][0] <= dd:
+            p += 1
+        nav_ptr[code] = p
+        return rows[p][1] if p >= 0 and rows[p][0] <= dd else None
+
     out = []
-    flow_cfs = [(d, v) for d, v in flows]
+    pos = {c: 0.0 for c in CORE}
+    flow_cf = []      # 截至当日的现金流(已发生的)
+    # 现金流按日期分组(从flows)
+    flow_by_date = defaultdict(list)
+    for d, v in flows:
+        flow_by_date[d].append(v)
     for dd in dates:
-        # 该日的持仓 = 重放所有 <= dd 的交易
-        p = {c: 0.0 for c in CORE}
-        for d, code, pv, q, o in recs:
-            if d > dd: break
-            if o == 0: continue
-            if o < 0: p[code] += q
+        # 应用该日期的交易变更(增量)
+        for code, pv, q, o in trade_by_date.get(dd, []):
+            if o < 0:
+                pos[code] += q
             else:
-                if pv > 0 and q > 0: p[code] -= q
+                if pv > 0 and q > 0:
+                    pos[code] -= q
+        # 该日现金流并入
+        flow_cf.extend((dd, v) for v in flow_by_date.get(dd, []))
+        # 用当前持仓 + 当日净值算总市值
         total = 0.0
         for code in CORE:
-            if p[code] == 0: continue
-            nv = get_nav(code, dd)
-            if nv is not None: total += p[code] * nv
-        cf = [(d, v) for d, v in flow_cfs if d <= dd]
-        yr = xirr(cf, dd, total) if total > 0 else None
+            if pos[code] == 0: continue
+            nv = nav_for(code, dd)
+            if nv is not None:
+                total += pos[code] * nv
+        # xirr 只有从首笔现金流后有足够天数才计算
+        yr = xirr(flow_cf, dd, total) if total > 0 else None
         out.append({"d": dd, "mv": round(total, 2), "xirr": round(yr, 2) if yr is not None else None,
-                    "pos": {c: int(p[c]) for c in CORE}})
+                    "pos": {c: int(pos[c]) for c in CORE}})
     return out
 
 # ---------- API ----------
@@ -209,31 +250,52 @@ def compute_fund_daily(code):
             continue
         if o == 0:
             continue
-        dd = "%s-%s-%s" % (d[0:4], d[4:6], d[6:8])
+        dd = norm_date(d)
         flows.append((dd, o))
         trades.append((dd, p, q, o))
     if not flows:
         return {"ok": False, "error": "无交易记录"}
-    # 逐日: 到某日为止在该基金的持仓数量 × 当日净值 = 市值
-    dates = sorted(set(f[0] for f in flows))
+    # 日期序列: 从首笔交易日起, 延伸到净值库最新交易日(持仓不变, 市值随净值更新)
+    nav_conn = sqlite3.connect(DB)
+    nav_cur = nav_conn.cursor()
+    all_dates = [r[0] for r in nav_cur.execute("SELECT fsrq FROM fund_nav WHERE fund_code=? ORDER BY fsrq", (code,))]
+    nav_conn.close()
+    first_trade = min(f[0] for f in flows)
+    dates = [d for d in all_dates if d >= first_trade]
+    # 增量维护持仓 + 指针推进净值
+    from collections import defaultdict
+    trade_by_date = defaultdict(list)
+    for d, p, q, o in trades:
+        trade_by_date[d].append((p, q, o))
+    nav_rows = _nav_sorted[code]
+    nav_ptr = 0
+    def nav_for(dd):
+        nonlocal nav_ptr
+        while nav_ptr + 1 < len(nav_rows) and nav_rows[nav_ptr + 1][0] <= dd:
+            nav_ptr += 1
+        if nav_ptr >= 0 and nav_rows[nav_ptr][0] <= dd:
+            return nav_rows[nav_ptr][1]
+        return None
+    pos = 0.0
+    flow_cf = []
+    flow_by_date = defaultdict(list)
+    for d, v in flows:
+        flow_by_date[d].append(v)
     series = []
     for dd in dates:
-        # 重放到dd日的持仓
-        pos = 0.0
-        for d, p, q, o in trades:
-            if d > dd:
-                break
+        # 应用该日该基金交易(增量)
+        for p, q, o in trade_by_date.get(dd, []):
             if o < 0:
                 pos += q
             else:
                 if p > 0 and q > 0:
                     pos -= q
-        nv = get_nav(code, dd)
-        if nv is None or pos <= 0:
+        flow_cf.extend((dd, v) for v in flow_by_date.get(dd, []))
+        nv = nav_for(dd)
+        if nv is None:
             continue
         mv = pos * nv
-        cfs = [(d, v) for d, v in flows if d <= dd]
-        yr = xirr(cfs, dd, mv, min_days=15)
+        yr = xirr(flow_cf, dd, mv, min_days=15) if mv > 0 else None
         series.append({"d": dd, "mv": round(mv, 2), "xirr": round(yr, 2) if yr is not None else None})
     return {"ok": True, "code": code, "name": FUNDS.get(code, code), "series": series}
 

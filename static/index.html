@@ -138,10 +138,12 @@ async function renderFund(code){
   const series = d.series||[];
   const days = series.map(p=>p.d);
   const xirr = series.map(p=>p.xirr==null?null:p.xirr);
-  const title = (d.name||code)+' 个人年化(XIRR)';
+  const last = series[series.length-1]||{};
+  const currMv = last.mv!=null ? ' · 当前市值 '+(last.mv/10000).toFixed(1)+'万' : '';
+  const title = (d.name||code)+' 个人年化(XIRR)'+currMv;
   fundChart.setOption({
     title:{text:title,left:'center',textStyle:{fontSize:15}},
-    tooltip:{trigger:'axis',formatter:function(ps){const p=ps[0];return p.name+'<br/>个人年化:'+p.value.toFixed(2)+'%';}},
+    tooltip:{trigger:'axis',formatter:function(ps){const p=ps[0];const v=p.value;return p.name+'<br/>个人年化:'+(v==null?'—':v.toFixed(2)+'%');}},
     grid:{left:60,right:30,top:50,bottom:50},
     xAxis:{type:'category',data:days,axisLabel:{rotate:45,fontSize:10},boundaryGap:false},
     yAxis:{type:'value',name:'年化%',axisLabel:{formatter:'{value}%'}},
