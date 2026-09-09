@@ -39,6 +39,15 @@ def load_nav():
     _nav_sorted = s
     return s
 
+def norm_date(d):
+    """将日期统一为 YYYY-MM-DD。兼容 20240930 和 2026-09-08 两种输入。"""
+    d = (d or "").strip()
+    if len(d) == 8 and d.isdigit():
+        return "%s-%s-%s" % (d[0:4], d[4:6], d[6:8])
+    if len(d) >= 10:
+        return d[0:10]
+    return d
+
 def load_flow():
     """从对账单读取核心标的现金流(发生金额负=买, 正=卖/分红), 统一日期。"""
     global _flow
@@ -51,8 +60,22 @@ def load_flow():
         try: v = float(occur) if occur else 0
         except: continue
         if v == 0: continue
-        dd = "%s-%s-%s" % (d[0:4], d[4:6], d[6:8])
+        dd = norm_date(d)
         flows.append((dd, v))
+    # 合并 holdings 表的现金流(买入=负支出, 卖出=正收入) 用于 XIRR
+    for hd, hcode, haction, hqty, hprice in cur.execute(
+        "SELECT hdate, sec_code, action, qty, price FROM holdings WHERE sec_code IN (%s)"
+        % ",".join("?"*len(CORE)), CORE):
+        try:
+            hq = float(hqty) if hqty else 0.0
+            hp = float(hprice) if hprice else 0.0
+        except: continue
+        if hq == 0: continue
+        dd = norm_date(hd)
+        if haction == "BUY":
+            flows.append((dd, -(hq * hp) if hp > 0 else -1.0))
+        elif haction == "SELL":
+            flows.append((dd, (hq * hp) if hp > 0 else 1.0))
     conn.close()
     flows.sort()
     _flow = flows
@@ -91,14 +114,6 @@ def compute_daily():
     """计算每日: 日期/持仓数量/总市值/XIRR。"""
     load_nav()
     flows = load_flow()
-    # 重建每日持仓
-    pos = {c: 0.0 for c in CORE}
-    daily_pos = OrderedDict()
-    flow_by_date = {}
-    for d, v in flows:
-        flow_by_date[d] = flow_by_date.get(d, 0.0) + v
-        if v < 0:
-            pass
     # 需要对每笔知道数量和代码来重建持仓 → 用数据库重读
     conn = sqlite3.connect(DZ_DB)
     cur = conn.cursor()
@@ -111,19 +126,26 @@ def compute_daily():
             q = float(qty) if qty else 0.0
             o = float(occur) if occur else 0.0
         except: continue
-        recs.append((d, code, p, q, o))
+        recs.append((norm_date(d), code, p, q, o))
+    # 合并 holdings 表: 用户录入的仓位变化(买入/卖出)也参与持仓重建
+    for hd, hcode, haction, hqty, hprice in cur.execute(
+        "SELECT hdate, sec_code, action, qty, price FROM holdings WHERE sec_code IN (%s)"
+        % ",".join("?"*len(CORE)), CORE):
+        try:
+            hq = float(hqty) if hqty else 0.0
+            hp = float(hprice) if hprice else 0.0
+        except: continue
+        if hq == 0: continue
+        hd_fmt = norm_date(hd)
+        if haction == "BUY":
+            est_price = hp if hp > 0 else 0.0
+            recs.append((hd_fmt, hcode, 0.0, hq, -hq * est_price if est_price else -1.0))
+        elif haction == "SELL":
+            est_price = hp if hp > 0 else 0.0
+            recs.append((hd_fmt, hcode, est_price, hq, hq * est_price if est_price else 1.0))
     conn.close()
     recs.sort(key=lambda x: (x[0], x[1]))
-    pos = {c: 0.0 for c in CORE}
-    dates = []
-    for d, code, p, q, o in recs:
-        if o == 0: continue
-        if o < 0: pos[code] += q
-        else:
-            if p > 0 and q > 0: pos[code] -= q
-        dd = "%s-%s-%s" % (d[0:4], d[4:6], d[6:8])
-        dates.append(dd)
-    dates = sorted(set(dates))
+    dates = sorted(set(r[0] for r in recs))
     # 逐日市值 + XIRR
     out = []
     flow_cfs = [(d, v) for d, v in flows]
@@ -131,8 +153,7 @@ def compute_daily():
         # 该日的持仓 = 重放所有 <= dd 的交易
         p = {c: 0.0 for c in CORE}
         for d, code, pv, q, o in recs:
-            day = "%s-%s-%s" % (d[0:4], d[4:6], d[6:8])
-            if day > dd: break
+            if d > dd: break
             if o == 0: continue
             if o < 0: p[code] += q
             else:

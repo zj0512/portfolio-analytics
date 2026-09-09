@@ -169,6 +169,8 @@ document.getElementById('btn_submit').onclick = async ()=>{
   const r = await fetch('/api/holding',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const d = await r.json();
   document.getElementById('msg').textContent = '已提交: '+JSON.stringify(d.received||d);
+  // 提交成功后自动重算并刷新所有曲线
+  await fetchAndRender();
 };
 document.getElementById('btn_refresh').onclick = fetchAndRender;
 
