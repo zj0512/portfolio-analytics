@@ -257,5 +257,10 @@ def api_holding():
     return jsonify({"ok": True, "id": new_id, "received": body})
 
 if __name__ == "__main__":
+    import atexit
+    from scheduler import start_scheduler, stop_scheduler
+    scheduler = start_scheduler()   # 启动工具时拉起定时任务(随工具启停, 零token)
+    atexit.register(stop_scheduler, scheduler)  # 工具退出时停止
     print("启动投资组合分析工具: http://0.0.0.0:5050 (局域网可访问)")
+    print("定时任务已加载: 工作日15:02 自动更新净值")
     app.run(host="0.0.0.0", port=5050, debug=False)
