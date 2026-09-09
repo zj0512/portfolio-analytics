@@ -91,25 +91,40 @@ function buildFundButtons(){
   });
 }
 
-function renderAll(data){
+function renderAll(data, bench){
   const daily = data.daily;
   const xs = daily.map(o=>o.d);
   const xirr = daily.map(o=>o.xirr==null?null:o.xirr);
   const mv = daily.map(o=>o.mv);
+  // 基准数据(上证指数)
+  const bx = (bench && bench.bench_xirr) ? bench.bench_xirr : [];
+  const bdates = bx.map(o=>o.d);
+  const bxirr = bx.map(o=>o.xirr==null?null:o.xirr);
+  const bpct = bx.map(o=>o.pct==null?null:o.pct);
+  const bpctMap = {};
+  bx.forEach(o=>{bpctMap[o.d]=o.pct;});
   // 信息栏
   const last = daily[daily.length-1];
+  const lastBench = bx[bx.length-1]||{};
   document.getElementById('info').innerHTML =
     '<div>期末<b>'+last.d+'</b></div>'+
     '<div>当前市值<b>'+(last.mv/10000).toFixed(1)+'万</b></div>'+
     '<div>日年化<b>'+(last.xirr==null?'—':last.xirr+'%')+'</b></div>'+
-    '<div>样本天数<b>'+daily.length+'</b></div>';
-  // 整体年化
+    '<div>上证基准<b>'+(lastBench.xirr==null?'—':lastBench.xirr+'%')+'</b></div>'+
+    '<div>上证累计涨跌<b>'+(lastBench.pct==null?'—':lastBench.pct+'%')+'</b></div>';
+  // 整体年化(双Y轴: 左% 年化+涨跌幅, 右 上证指数点位)
   if(!overallChart) overallChart=echarts.init(document.getElementById('overall'));
   overallChart.setOption({
-    tooltip:{trigger:'axis'}, grid:{left:60,right:30,top:40,bottom:50},
+    tooltip:{trigger:'axis'},
+    legend:{data:['日年化','上证基准年化','上证累计涨跌'],top:0,textStyle:{fontSize:11}},
+    grid:{left:60,right:60,top:40,bottom:50},
     xAxis:{type:'category',data:xs,axisLabel:{rotate:45,fontSize:10},boundaryGap:false},
-    yAxis:{type:'value',name:'年化%',axisLabel:{formatter:'{value}%'}},
-    series:[{name:'日年化',type:'line',smooth:true,symbol:'none',data:xirr,lineStyle:{width:2,color:'#c0392b'},areaStyle:{color:'#c0392b',opacity:0.12}}]
+    yAxis:[{type:'value',name:'%',axisLabel:{formatter:'{value}%'},position:'left'}],
+    series:[
+      {name:'日年化',type:'line',smooth:true,symbol:'none',data:xirr,lineStyle:{width:2,color:'#c0392b'},areaStyle:{color:'#c0392b',opacity:0.12}},
+      {name:'上证基准年化',type:'line',smooth:true,symbol:'none',data:bxirr,lineStyle:{width:1.5,color:'#2980b9'},yAxisIndex:0},
+      {name:'上证累计涨跌',type:'line',smooth:true,symbol:'none',data:bpct,lineStyle:{width:1.5,color:'#27ae60',type:'dashed'},yAxisIndex:0}
+    ]
   });
   // 市值
   if(!mvChart) mvChart=echarts.init(document.getElementById('mv'));
@@ -125,8 +140,10 @@ function renderAll(data){
 async function fetchAndRender(){
   const r = await fetch('/api/daily');
   const data = await r.json();
+  const br = await fetch('/api/benchmark');
+  const bench = await br.json();
   loadFunds(data);
-  renderAll(data);
+  renderAll(data, bench);
   renderFund(Object.keys(FUNDS)[0]);
 }
 

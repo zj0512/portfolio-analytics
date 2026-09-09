@@ -26,6 +26,7 @@ app = Flask(__name__, static_folder=STATIC, static_url_path="/static")
 _nav_sorted = None     # {code: [(fsrq,dwjz),...]}
 _daily_pos = None      # {YYYY-MM-DD: {code:qty}}
 _flow = None           # [(YYYY-MM-DD, amt), ...]
+_index_sorted = None   # 上证指数 [(fsrq,close),...]
 
 def load_nav():
     global _nav_sorted
@@ -38,6 +39,16 @@ def load_nav():
     conn.close()
     _nav_sorted = s
     return s
+
+def load_index():
+    """加载上证指数日线收盘价. INDEX_CODE=000001."""
+    global _index_sorted
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    rows = cur.execute("SELECT fsrq, close FROM index_nav WHERE index_code=? ORDER BY fsrq", ("000001",)).fetchall()
+    conn.close()
+    _index_sorted = rows
+    return rows
 
 def norm_date(d):
     """将日期统一为 YYYY-MM-DD。兼容 20240930 和 2026-09-08 两种输入。"""
@@ -219,6 +230,66 @@ def index():
 def api_daily():
     data = compute_daily()
     return jsonify({"funds": FUNDS, "daily": data})
+
+def compute_benchmark():
+    """计算上证指数对比基准, 返回两条序列:
+    1. benchmark_xirr: 把你的现金流按同样时点虚拟买入上证指数, 算资金加权XIRR%
+    2. pct: 上证指数从首笔交易日起的累计涨跌%
+    """
+    load_nav()
+    load_index()
+    flows = load_flow()
+    if not flows:
+        return {"ok": False, "error": "无现金流"}
+    if not _index_sorted:
+        return {"ok": False, "error": "无指数数据"}
+    # 上证指数有序 日期->收盘指数
+    idx_dates = [r[0] for r in _index_sorted]
+    idx_close = [r[1] for r in _index_sorted]
+    # 现金流日期集合(买入/卖出发生日)
+    flow_dates = sorted(set(d for d, v in flows))
+    first_trade = flow_dates[0]
+    # 从首笔交易日开始的所有指数交易日
+    base_i = next((i for i, d in enumerate(idx_dates) if d >= first_trade), 0)
+    bench_dates = idx_dates[base_i:]
+
+    def idx_at(fsrq):
+        # 取 <= fsrq 的最近收盘(用bisect)
+        i = bisect.bisect_right(idx_dates, fsrq) - 1
+        return idx_close[i] if i >= 0 else None
+
+    # 累计涨跌幅%: (close / base_close - 1) * 100
+    base_close = idx_close[base_i]
+    def pct_at(close):
+        return round((close / base_close - 1) * 100, 2)
+    date_pct = {d: pct_at(idx_close[base_i + i]) for i, d in enumerate(bench_dates)}
+
+    # 资金加权基准XIRR: 用你每笔现金流(金额), 虚拟投资于上证指数
+    # 每笔现金流在当日以当日指数换算成份额, 期末 = 份额 × 期末指数
+    shares = 0.0
+    flow_by_date = {}
+    for d, v in flows:
+        flow_by_date.setdefault(d, 0.0)
+        flow_by_date[d] += v
+    bench_series = []
+    for dd in bench_dates:
+        iv = idx_at(dd)
+        if iv is None:
+            continue
+        amt = flow_by_date.get(dd, 0.0)
+        if amt != 0:
+            # 买入现金流为负(花钱) => 增加上证份额; 卖出为正 => 减少份额
+            shares -= amt / iv
+        mv = shares * iv
+        cfs = [(d, v) for d, v in flows if d <= dd]
+        yr = xirr(cfs, dd, mv, min_days=30) if mv > 0 else None
+        bench_series.append({"d": dd, "xirr": round(yr, 2) if yr is not None else None,
+                             "pct": date_pct[dd]})
+    return {"ok": True, "index_name": "上证指数", "bench_xirr": bench_series}
+
+@app.route("/api/benchmark")
+def api_benchmark():
+    return jsonify(compute_benchmark())
 
 @app.route("/api/nav")
 def api_nav():
