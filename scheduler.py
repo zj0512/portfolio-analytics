@@ -22,7 +22,7 @@ log = logging.getLogger("portfolio.scheduler")
 def _update_nav_job():
     """抓取13只基金最新净值并更新数据库(纯脚本, 不调模型)。"""
     import subprocess, sys, os
-    script = r"C:\Users\zc\.openclaw\workspace\update_nav.py"
+    script = r"D:\zj\portfolio_app\update_nav.py"
     py = r"C:\Users\zc\AppData\Local\Programs\Python\Python312\python.exe"
     try:
         subprocess.run([py, script], capture_output=True, timeout=300)

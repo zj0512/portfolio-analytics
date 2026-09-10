@@ -6,10 +6,10 @@ import os, json, sqlite3, datetime, bisect
 from collections import OrderedDict
 from flask import Flask, jsonify, request, send_from_directory
 
-BASE = r"C:\Users\zc\.openclaw\workspace"
+BASE = r"D:\zj\portfolio_app"
 DB = os.path.join(BASE, "portfolio.db")          # 净值库
 DZ_DB = os.path.join(BASE, "portfolio_duizhang.db")  # 对账单库
-STATIC = os.path.join(BASE, "portfolio_app", "static")
+STATIC = os.path.join(BASE, "static")
 
 # 标的映射
 FUNDS = {
