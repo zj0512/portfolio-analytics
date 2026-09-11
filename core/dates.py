@@ -17,5 +17,9 @@ def today():
     return datetime.date.today().strftime("%Y-%m-%d")
 
 
+def now_str():
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def days_ago(n):
     return (datetime.date.today() - datetime.timedelta(days=n)).strftime("%Y-%m-%d")

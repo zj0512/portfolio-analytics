@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """数据存取层: SQLite 读写, 只负责 SQL, 不含业务计算。"""
+import json
 import sqlite3
 from .config import DB, DZ_DB, CORE, INDEX_CODE
-from .dates import norm_date
+from .dates import norm_date, now_str
 
 
 def _conn(path):
@@ -145,6 +146,29 @@ def holdings_list():
                 "SELECT id, hdate, sec_code, action, qty, price FROM holdings ORDER BY hdate")]
     conn.close()
     return rows
+
+
+# ---------- 模拟比例调整 ----------
+def sim_alloc_get():
+    conn = _conn(DB)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS sim_alloc (id INTEGER PRIMARY KEY CHECK(id=1),"
+        " payload TEXT, updated_at TEXT)")
+    row = conn.execute("SELECT payload FROM sim_alloc WHERE id=1").fetchone()
+    conn.close()
+    return json.loads(row[0]) if row and row[0] else None
+
+
+def sim_alloc_set(payload):
+    conn = _conn(DB)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS sim_alloc (id INTEGER PRIMARY KEY CHECK(id=1),"
+        " payload TEXT, updated_at TEXT)")
+    conn.execute(
+        "INSERT OR REPLACE INTO sim_alloc (id, payload, updated_at) VALUES (1,?,?)",
+        (json.dumps(payload, ensure_ascii=False), now_str()))
+    conn.commit()
+    conn.close()
 
 
 def holding_add(date, code, action, qty, price):

@@ -2,7 +2,7 @@
 """Web 层: Flask 路由, 只做参数校验和调用 core, 不含业务逻辑。"""
 from flask import Flask, jsonify, request, send_from_directory
 
-from core import calcs, db, fetchers
+from core import calcs, db, fetchers, sim_alloc
 from core.config import STATIC, FUNDS, DEFAULT_FUND, PORT
 from core.dates import today
 
@@ -59,6 +59,24 @@ def api_holding_add():
         return jsonify({"ok": False, "error": "缺失字段或代码非法"})
     new_id = db.holding_add(date, code, action, qty, price)
     return jsonify({"ok": True, "id": new_id, "received": body})
+
+
+@app.route("/api/sim_alloc", methods=["GET"])
+def api_sim_alloc_get():
+    return jsonify({"ok": True, "alloc": db.sim_alloc_get()})
+
+
+@app.route("/api/sim_alloc", methods=["POST"])
+def api_sim_alloc_post():
+    """保存并计算模拟: body {alloc:{code:weight,...}}。权重实时覆盖存库。"""
+    body = request.get_json(force=True)
+    alloc = body.get("alloc")
+    if not isinstance(alloc, dict):
+        return jsonify({"ok": False, "error": "alloc 必须是 {code:weight} 对象"})
+    result = sim_alloc.compute_sim(alloc)
+    if result.get("ok"):
+        db.sim_alloc_set(alloc)  # 每次修改实时覆盖
+    return jsonify(result)
 
 
 @app.route("/api/sync", methods=["POST"])

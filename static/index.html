@@ -274,12 +274,86 @@ document.getElementById('btn_submit').onclick = async ()=>{
 };
 document.getElementById('btn_refresh').onclick = fetchAndRender;
 
+// ---------- 比例调整预测 ----------
+let simChart;
+function buildSimForm(saved){
+  const box = document.getElementById('sim_form');
+  box.innerHTML='';
+  Object.keys(FUNDS).forEach(code=>{
+    const d=document.createElement('div');
+    d.innerHTML='<label>'+FUNDS[code]+'</label>'+
+      '<input type="number" min="0" max="100" step="0.5" data-code="'+code+'" value="'+((saved&&saved[code]!=null)?saved[code]:'')+'" placeholder="0">';
+    box.appendChild(d);
+  });
+}
+function collectSimAlloc(){
+  const alloc={}; let sum=0;
+  document.querySelectorAll('#sim_form input').forEach(inp=>{
+    const v=parseFloat(inp.value);
+    if(v>0){alloc[inp.dataset.code]=v; sum+=v;}
+  });
+  return {alloc,sum};
+}
+async function runSim(){
+  const {alloc,sum}=collectSimAlloc();
+  const msg=document.getElementById('sim_msg');
+  if(!Object.keys(alloc).length){msg.textContent='请至少给一个基金填入大于0的权重';msg.style.color='#c0392b';return;}
+  msg.style.color='#8e44ad';
+  msg.textContent='计算中...';
+  const r=await fetch('/api/sim_alloc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({alloc})});
+  const d=await r.json();
+  if(!d.ok){msg.textContent='错误: '+d.error;msg.style.color='#c0392b';return;}
+  msg.textContent='已保存并计算完成';
+  const s=d.summary||{};
+  document.getElementById('sim_sum').innerHTML=
+    '回放区间 '+s.start+' ~ '+(s.end||'')+
+    ' · 模拟年化 <b style="color:#8e44ad">'+(s.sim_last_xirr==null?'—':s.sim_last_xirr+'%')+'</b>'+
+    ' · 实际年化 '+(s.actual_last_xirr==null?'—':s.actual_last_xirr+'%')+
+    (Math.abs(sum-100)>0.01?' · 权重合计'+sum+'%(已自动归一)':'');
+  const xs=(d.series||[]).map(p=>p.d);
+  const sim=(d.series||[]).map(p=>p.xirr==null?null:p.xirr);
+  const actMap={}; (d.actual||[]).forEach(p=>actMap[p.d]=p.pct_xirr==null?null:p.pct_xirr);
+  const act=xs.map(dd=>dd in actMap?actMap[dd]:null);
+  if(!simChart) simChart=echarts.init(document.getElementById('sim_chart'));
+  simChart.setOption({
+    tooltip:{trigger:'axis'},
+    legend:{data:['模拟组合年化','实际组合年化'],top:0,textStyle:{fontSize:11}},
+    grid:{left:60,right:30,top:40,bottom:60},
+    xAxis:{type:'category',data:xs,axisLabel:{rotate:45,fontSize:10},boundaryGap:false},
+    yAxis:{type:'value',name:'年化%',axisLabel:{formatter:'{value}%'}},
+    series:[
+      {name:'模拟组合年化',type:'line',smooth:true,symbol:'none',data:sim,lineStyle:{width:2,color:'#8e44ad'},areaStyle:{color:'#8e44ad',opacity:0.1}},
+      {name:'实际组合年化',type:'line',smooth:true,symbol:'none',data:act,connectNulls:true,lineStyle:{width:1.5,color:'#7f8c8d',type:'dashed'}}
+    ]
+  },true);
+}
+document.getElementById('btn_sim').onclick=runSim;
+// 初始化: 加载已存权重并首次计算
+(async()=>{
+  try{
+    const d=await fetch('/api/sim_alloc').then(r=>r.json());
+    buildSimForm(d.alloc);
+    if(d.alloc&&Object.keys(d.alloc).length) runSim();
+  }catch(e){ buildSimForm(null); }
+})();
+
 // 录入页日期默认今天
 document.getElementById('f_date').value = new Date().toISOString().slice(0,10);
 
-window.addEventListener('resize',()=>{overallChart&&overallChart.resize();mvChart&&mvChart.resize();fundChart&&fundChart.resize();});
+window.addEventListener('resize',()=>{overallChart&&overallChart.resize();mvChart&&mvChart.resize();fundChart&&fundChart.resize();simChart&&simChart.resize();});
 
 fetchAndRender();
 </script>
+<div class="card">
+  <div style="margin-bottom:8px"><b>比例调整预测</b> <span style="color:#888;font-size:12px">按目标权重每日再平衡回放历史净值 · 修改实时保存</span></div>
+  <div id="sim_form" class="form" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))"></div>
+  <div style="display:flex;gap:10px;align-items:center;margin-top:10px">
+    <button id="btn_sim" style="padding:8px 20px;background:#8e44ad;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:bold">模拟计算</button>
+    <span id="sim_sum" style="font-size:13px;color:#555"></span>
+  </div>
+  <div id="sim_msg" style="font-size:12px;color:#8e44ad;margin-top:6px"></div>
+  <div class="chart" id="sim_chart"></div>
+</div>
+
 </body>
 </html>
