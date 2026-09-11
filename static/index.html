@@ -69,6 +69,8 @@
     <div class="range-btn fr" data-days="182">近6月</div>
     <div class="range-btn fr" data-days="365">近1年</div>
     <div class="range-btn fr" data-days="0">全部</div>
+    <span style="margin-left:8px">自定义:</span>
+    <input type="date" id="fr_from"> ~ <input type="date" id="fr_to">
   </div>
   <div style="margin-bottom:8px"><b>单只基金</b> <span style="color:#888;font-size:12px">点击按钮切换</span></div>
   <div class="funds" id="funds"></div>
@@ -94,7 +96,7 @@ let FUNDS = {};
 let DEFAULT_FUND = '';
 let overallChart, mvChart, fundChart;
 let curRange = {days:91, from:null, to:null};   // 默认近3个月
-let curFundRange = {days:91};                   // 单基金区间, 默认近3个月
+let curFundRange = {days:91, from:null, to:null};       // 单基金区间, 默认近3个月
 let lastDaily = [], lastBench = [];
 
 // ---------- 时间区间 ----------
@@ -115,7 +117,8 @@ function fundRangeStart(){
   }
   return '1900-01-01';
 }
-function fundInRange(d){ return d>=fundRangeStart(); }
+function fundInRange(d){ return d>=fundRangeStart() && d<=fundRangeEnd(); }
+function fundRangeEnd(){ return curFundRange.to || '2999-12-31'; }
 
 function applyRangeBtn(el){
   document.querySelectorAll('.range-btn:not(.fr)').forEach(x=>x.classList.remove('active'));
@@ -129,8 +132,15 @@ document.querySelectorAll('.range-btn.fr').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.range-btn.fr').forEach(x=>x.classList.remove('active'));
   b.classList.add('active');
   curFundRange.days = parseInt(b.dataset.days||'0');
+  if(curFundRange.days>0){ curFundRange.from=curFundRange.to=null; }
   if(curFundCode) renderFund(curFundCode);
 });
+document.getElementById('fr_from').onchange = ()=>{curFundRange.days=0;curFundRange.from=document.getElementById('fr_from').value||null;
+  document.querySelectorAll('.range-btn.fr').forEach(x=>x.classList.remove('active'));
+  if(curFundCode) renderFund(curFundCode);};
+document.getElementById('fr_to').onchange = ()=>{curFundRange.days=0;curFundRange.to=document.getElementById('fr_to').value||null;
+  document.querySelectorAll('.range-btn.fr').forEach(x=>x.classList.remove('active'));
+  if(curFundCode) renderFund(curFundCode);};
 document.getElementById('r_from').onchange = ()=>{curRange.days=0;curRange.from=document.getElementById('r_from').value||null;
   document.querySelectorAll('.range-btn:not(.fr)').forEach(x=>x.classList.remove('active'));renderAll();};
 document.getElementById('r_to').onchange = ()=>{curRange.days=0;curRange.to=document.getElementById('r_to').value||null;
