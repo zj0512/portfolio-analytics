@@ -128,6 +128,7 @@ function applyRangeBtn(el){
   curRange.to   = curRange.days>0 ? null : document.getElementById('r_to').value||null;
   renderAll();
 }
+document.querySelectorAll('.range-btn:not(.fr)').forEach(b=>b.onclick=()=>applyRangeBtn(b));
 document.querySelectorAll('.range-btn.fr').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.range-btn.fr').forEach(x=>x.classList.remove('active'));
   b.classList.add('active');
