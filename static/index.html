@@ -62,6 +62,14 @@
 </div>
 
 <div class="card">
+  <div class="range">
+    <span>时间段:</span>
+    <div class="range-btn fr" data-days="30">近1月</div>
+    <div class="range-btn fr active" data-days="91">近3月</div>
+    <div class="range-btn fr" data-days="182">近6月</div>
+    <div class="range-btn fr" data-days="365">近1年</div>
+    <div class="range-btn fr" data-days="0">全部</div>
+  </div>
   <div style="margin-bottom:8px"><b>单只基金</b> <span style="color:#888;font-size:12px">点击按钮切换</span></div>
   <div class="funds" id="funds"></div>
   <div class="chart" id="fund"></div>
@@ -86,6 +94,7 @@ let FUNDS = {};
 let DEFAULT_FUND = '';
 let overallChart, mvChart, fundChart;
 let curRange = {days:91, from:null, to:null};   // 默认近3个月
+let curFundRange = {days:91};                   // 单基金区间, 默认近3个月
 let lastDaily = [], lastBench = [];
 
 // ---------- 时间区间 ----------
@@ -99,20 +108,33 @@ function rangeStart(){
 }
 function rangeEnd(){ return curRange.to || '2999-12-31'; }
 function inRange(d){ return d>=rangeStart() && d<=rangeEnd(); }
+function fundRangeStart(){
+  if(curFundRange.days>0){
+    const d=new Date(); d.setDate(d.getDate()-curFundRange.days);
+    return d.toISOString().slice(0,10);
+  }
+  return '1900-01-01';
+}
+function fundInRange(d){ return d>=fundRangeStart(); }
 
 function applyRangeBtn(el){
-  document.querySelectorAll('.range-btn').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.range-btn:not(.fr)').forEach(x=>x.classList.remove('active'));
   el.classList.add('active');
   curRange.days = parseInt(el.dataset.days||'0');
   curRange.from = curRange.days>0 ? null : document.getElementById('r_from').value||null;
   curRange.to   = curRange.days>0 ? null : document.getElementById('r_to').value||null;
   renderAll();
 }
-document.querySelectorAll('.range-btn').forEach(b=>b.onclick=()=>applyRangeBtn(b));
+document.querySelectorAll('.range-btn.fr').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.range-btn.fr').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  curFundRange.days = parseInt(b.dataset.days||'0');
+  if(curFundCode) renderFund(curFundCode);
+});
 document.getElementById('r_from').onchange = ()=>{curRange.days=0;curRange.from=document.getElementById('r_from').value||null;
-  document.querySelectorAll('.range-btn').forEach(x=>x.classList.remove('active'));renderAll();};
+  document.querySelectorAll('.range-btn:not(.fr)').forEach(x=>x.classList.remove('active'));renderAll();};
 document.getElementById('r_to').onchange = ()=>{curRange.days=0;curRange.to=document.getElementById('r_to').value||null;
-  document.querySelectorAll('.range-btn').forEach(x=>x.classList.remove('active'));renderAll();};
+  document.querySelectorAll('.range-btn:not(.fr)').forEach(x=>x.classList.remove('active'));renderAll();};
 
 // ---------- 数据加载 ----------
 function loadFunds(data){
@@ -208,7 +230,7 @@ async function renderFund(code){
   const d = await fetch('/api/fund_xirr?code='+code).then(r=>r.json());
   if(curFundCode!==code) return;  // 已切到别的基金, 丢弃过期响应
   if(!fundChart) fundChart=echarts.init(document.getElementById('fund'));
-  const series = (d.series||[]).filter(p=>inRange(p.d));
+  const series = (d.series||[]).filter(p=>fundInRange(p.d));
   const days = series.map(p=>p.d);
   const xirr = series.map(p=>p.xirr==null?null:p.xirr);
   const all = d.series||[];
