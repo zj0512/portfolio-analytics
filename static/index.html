@@ -274,7 +274,7 @@ let curFundCode = null;
 async function renderFund(code){
   if(!code) return;
   curFundCode = code;
-  document.querySelectorAll('.fund-btn').forEach(x=>x.classList.toggle('active', x.dataset.code===code));
+  document.querySelectorAll('#funds .fund-btn').forEach(x=>x.classList.toggle('active', x.dataset.code===code));
   const d = await fetch('/api/fund_xirr?code='+code).then(r=>r.json());
   if(curFundCode!==code) return;  // 已切到别的基金, 丢弃过期响应
   if(!fundChart) fundChart=echarts.init(document.getElementById('fund'));
