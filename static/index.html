@@ -231,9 +231,9 @@ function renderAll(){
     xAxis:baseAxis,
     yAxis:[{type:'value',name:'%',axisLabel:{formatter:'{value}%'},position:'left'}],
     series:[
-      {name:'日年化',type:'line',smooth:true,symbol:'none',data:xirr,lineStyle:{width:2,color:'#c0392b'},areaStyle:{color:'#c0392b',opacity:0.12}},
-      {name:'上证基准年化',type:'line',smooth:true,symbol:'none',data:bxirr,lineStyle:{width:1.5,color:'#2980b9'},yAxisIndex:0},
-      {name:'上证累计涨跌',type:'line',smooth:true,symbol:'none',data:bpct,lineStyle:{width:1.5,color:'#27ae60',type:'dashed'},yAxisIndex:0}
+      {name:'日年化',type:'line',smooth:true,symbol:'none',data:xirr,color:'#c0392b',lineStyle:{width:2,color:'#c0392b'},areaStyle:{color:'#c0392b',opacity:0.12}},
+      {name:'上证基准年化',type:'line',smooth:true,symbol:'none',data:bxirr,color:'#2980b9',lineStyle:{width:1.5,color:'#2980b9'},yAxisIndex:0},
+      {name:'上证累计涨跌',type:'line',smooth:true,symbol:'none',data:bpct,color:'#27ae60',lineStyle:{width:1.5,color:'#27ae60',type:'dashed'},yAxisIndex:0}
     ]
   },true);
   // 市值
