@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>投资组合分析工具</title>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="/static/echarts.min.js"></script>
 <style>
  body{font-family:'Microsoft YaHei',sans-serif;margin:0;padding:20px;background:#f5f6fa;color:#333}
  h1{font-size:22px;margin:0 0 6px}
@@ -256,15 +256,14 @@ async function fetchDaily(){
 }
 
 async function fetchAndRender(){
-  const r = await fetch('/api/daily');
-  const data = await r.json();
-  const br = await fetch('/api/benchmark');
-  const bench = await br.json();
+  // 首屏三请求并行: 基金列表用一次性小请求, daily 直接按已存选择拉
+  const pr = fetch('/api/daily').then(r=>r.json());      // 只为拿 funds 列表(快, 走缓存)
+  const pbr = fetch('/api/benchmark').then(r=>r.json());
+  const data = await pr;
   loadFunds(data);
-  lastDaily = data.daily||[];
-  lastBench = (bench&&bench.bench_xirr)||[];
   buildCoreSel();
-  fetchDaily();   // 按选择的基金重取
+  await fetchDaily();          // 按选择的基金重取(与 benchmark 并行中)
+  lastBench = ((await pbr)&&pbr.bench_xirr)||[];
   renderAll();
   renderFund(DEFAULT_FUND);   // 单只基金默认创业50
   initSim();                  // 基金列表就绪后再初始化比例调整预测表单

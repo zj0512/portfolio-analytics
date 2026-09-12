@@ -12,7 +12,7 @@ from .config import CORE, FUNDS, INDEX_NAME
 # compute_daily 结果短 TTL 缓存: 按基金选择集分桶,
 # 净值每日只更新一次, 30s 缓存足够新鲜且免重复计算
 _cache = {"lock": threading.Lock(), "map": {}}
-_CACHE_TTL = 30.0
+_CACHE_TTL = 300.0  # 净值每日更新一次, 5分钟缓存足够新鲜
 
 
 def xirr(cfs, end_date, end_val, min_days=30, prev_rate=None):
@@ -204,6 +204,18 @@ def compute_benchmark():
                       "xirr": round(yr, 2) if yr is not None else None,
                       "pct": round((close / base_close - 1) * 100, 2)})
     return {"ok": True, "index_name": INDEX_NAME, "bench_xirr": bench}
+
+
+def benchmark_cached():
+    """compute_benchmark 的 TTL 缓存(基准不随基金选择变化)。"""
+    with _cache["lock"]:
+        ent = _cache["map"].get("__bench__")
+        if ent is not None and time.time() - ent[1] < _CACHE_TTL:
+            return ent[0]
+    val = compute_benchmark()
+    with _cache["lock"]:
+        _cache["map"]["__bench__"] = (val, time.time())
+    return val
 
 
 def compute_fund_daily(code):

@@ -1,12 +1,16 @@
 # -*- coding: utf-8 -*-
 """Web 层: Flask 路由, 只做参数校验和调用 core, 不含业务逻辑。"""
 from flask import Flask, jsonify, request, send_from_directory
+from flask_compress import Compress
 
 from core import calcs, db, fetchers, sim_alloc
 from core.config import STATIC, FUNDS, DEFAULT_FUND, PORT
 from core.dates import today
 
 app = Flask(__name__, static_folder=STATIC, static_url_path="/static")
+Compress(app)
+app.config["COMPRESS_MIN_SIZE"] = 500      # 小千500字节不压
+app.config["COMPRESS_STREAMS"] = True        # 静态文件(send_from_directory流式)也压缩
 
 
 @app.route("/")
@@ -42,7 +46,7 @@ def api_positions():
 
 @app.route("/api/benchmark")
 def api_benchmark():
-    return jsonify(calcs.compute_benchmark())
+    return jsonify(calcs.benchmark_cached())
 
 
 @app.route("/api/nav")
