@@ -263,7 +263,7 @@ async function fetchAndRender(){
   loadFunds(data);
   buildCoreSel();
   await fetchDaily();          // 按选择的基金重取(与 benchmark 并行中)
-  lastBench = ((await pbr)&&pbr.bench_xirr)||[];
+  lastBench = ((await pbr)||{}).bench_xirr||[];
   renderAll();
   renderFund(DEFAULT_FUND);   // 单只基金默认创业50
   initSim();                  // 基金列表就绪后再初始化比例调整预测表单
