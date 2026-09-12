@@ -17,13 +17,13 @@ def index():
 @app.route("/api/daily")
 def api_daily():
     return jsonify({"funds": FUNDS, "default_fund": DEFAULT_FUND,
-                    "daily": calcs.compute_daily()})
+                    "daily": calcs.compute_daily_cached()})
 
 
 @app.route("/api/positions")
 def api_positions():
     """最新持仓与价格: 每只基金当前持仓数量 + 最新净值。"""
-    daily = calcs.compute_daily()
+    daily = calcs.compute_daily_cached()
     if not daily:
         return jsonify({"ok": False, "error": "无数据"})
     last = daily[-1]

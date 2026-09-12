@@ -2,13 +2,20 @@
 """计算层: XIRR、整体组合曲线、基准对比、单基金曲线。"""
 import bisect
 import datetime
+import threading
+import time
 from collections import defaultdict
 
 from . import db
 from .config import CORE, FUNDS, INDEX_NAME
 
+# compute_daily 结果短 TTL 缓存: 页面首屏 /api/daily 与 /api/positions 各调一次,
+# 净值每日只更新一次, 30s 缓存足够新鲜且免重复计算
+_cache = {"lock": threading.Lock(), "t": 0.0, "val": None}
+_CACHE_TTL = 30.0
 
-def xirr(cfs, end_date, end_val, min_days=30):
+
+def xirr(cfs, end_date, end_val, min_days=30, prev_rate=None):
     """资金加权年化%. cfs=[(date,amt)] 负=投入; end_date 时终值 end_val。
     时间太短(<min_days天)返回 None 避免失真。二分求解。"""
     if not cfs:
@@ -30,12 +37,22 @@ def xirr(cfs, end_date, end_val, min_days=30):
         return sum(amt / ((1 + r) ** yrs) for amt, yrs in amts)
 
     lo, hi = -0.99, 10.0
+    # 上一日解作初值先採一次, 能显著缩小区间(逐日序列变化很小)
+    if prev_rate is not None and -0.98 < prev_rate < 9.9:
+        if npv(prev_rate) > 0:
+            lo = prev_rate
+        else:
+            hi = prev_rate
+    # 收敛即停(NPV对r单调递减), 通常≲30次
     for _ in range(60):
         mid = (lo + hi) / 2
-        if npv(mid) > 0:
+        v = npv(mid)
+        if v > 0:
             lo = mid
         else:
             hi = mid
+        if hi - lo < 1e-7:
+            break
     return (lo + hi) / 2 * 100
 
 
@@ -94,6 +111,7 @@ def compute_daily():
     pos = {c: 0.0 for c in CORE}
     flow_cf = []
     out = []
+    prev_yr = None  # 上日解(小数), 作下一日二分初值
     for dd in dates:
         for code, p, q, o in trade_by_date.get(dd, []):
             if o < 0:
@@ -109,11 +127,24 @@ def compute_daily():
             nv = cursors[code].at(dd)
             if nv is not None:
                 total += pos[code] * nv
-        yr = xirr(flow_cf, dd, total) if total > 0 else None
+        yr = xirr(flow_cf, dd, total, prev_rate=prev_yr) if total > 0 else None
+        if yr is not None:
+            prev_yr = yr / 100.0
         out.append({"d": dd, "mv": round(total, 2),
                     "xirr": round(yr, 2) if yr is not None else None,
                     "pos": {c: int(pos[c]) for c in CORE if pos[c] != 0}})
     return out
+
+
+def compute_daily_cached():
+    """compute_daily 的 30s TTL 缓存封装。"""
+    with _cache["lock"]:
+        if _cache["val"] is not None and time.time() - _cache["t"] < _CACHE_TTL:
+            return _cache["val"]
+    val = compute_daily()
+    with _cache["lock"]:
+        _cache["val"], _cache["t"] = val, time.time()
+    return val
 
 
 def compute_benchmark():
@@ -140,14 +171,21 @@ def compute_benchmark():
 
     shares = 0.0
     bench = []
+    prev_yr = None
+    cfs = []  # 增量维护已发生的现金流, 避免每日重建 O(N²)
+    fi, nflows = 0, len(flows)
+    sorted_flows = sorted(flows)
     for i in range(base_i, len(idx_dates)):
         dd, close = idx_dates[i], idx_close[i]
+        while fi < nflows and sorted_flows[fi][0] <= dd:
+            cfs.append(sorted_flows[fi]); fi += 1
         amt = flow_by_date.get(dd, 0.0)
         if amt != 0:
             shares -= amt / close
         mv = shares * close
-        cfs = [(d, v) for d, v in flows if d <= dd]
-        yr = xirr(cfs, dd, mv, min_days=30) if mv > 0 else None
+        yr = xirr(cfs, dd, mv, min_days=30, prev_rate=prev_yr) if mv > 0 else None
+        if yr is not None:
+            prev_yr = yr / 100.0
         bench.append({"d": dd,
                       "xirr": round(yr, 2) if yr is not None else None,
                       "pct": round((close / base_close - 1) * 100, 2)})
