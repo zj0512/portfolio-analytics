@@ -331,7 +331,7 @@ function buildSimTable(){
   rows.sort((a,b)=>groupOrder.indexOf(a.group)-groupOrder.indexOf(b.group));
   const groupCount = {};
   rows.forEach(r=>{ groupCount[r.group]=(groupCount[r.group]||0)+1; });
-  const seenGroup = {};
+  const seenGroup = {}, seenGroupNow = {};
   simRows = [];
   rows.forEach(r=>{
     const tr = document.createElement('tr');
@@ -343,6 +343,14 @@ function buildSimTable(){
     const mkNum=(align)=>{const t=document.createElement('td');t.style.cssText='padding:5px 10px;border:1px solid #ddd;text-align:right';tr.appendChild(t);cells.push({el:t});return t;};
     // cells[1]=当前持仓, [2]=当前价格, [3]=当前市值, [4]=当前比例
     mkNum(); mkNum(); mkNum(); mkNum();
+    // 当前类别比例列(同类合并, 首行 rowspan)
+    const gtNow = document.createElement('td');
+    if(!seenGroupNow[r.group]){
+      seenGroupNow[r.group]=true;
+      if(groupCount[r.group]>1) gtNow.rowSpan = groupCount[r.group];
+    } else { gtNow.style.display='none'; }
+    gtNow.style.cssText='padding:5px 10px;border:1px solid #ddd;text-align:right;vertical-align:middle';
+    tr.appendChild(gtNow); cells.nowGroup = gtNow;
     // 第5列: 拟持仓输入框(永久 DOM)
     const td = document.createElement('td');
     td.style.cssText='padding:2px 6px;border:1px solid #ddd';
@@ -390,7 +398,8 @@ function updateSimTable(){
   const totalAdj = calc.reduce((s,r)=>s+(r.target-r.p.pos)*(r.p.price||0),0);
   const groupSum = {}, groupNow = {};
   calc.forEach(r=>{ groupSum[r.group]=(groupSum[r.group]||0)+r.mvAfter; groupNow[r.group]=(groupNow[r.group]||0)+r.mv; });
-  const gCells = {};
+  const gCells = {}, nowGroupShown = {};
+  const totalNowPctDone = {};
   simRows.forEach((o,i)=>{
     const c = calc[i], p = c.p, cells = o.cells;
     const adjQty = c.target - p.pos;
@@ -400,6 +409,11 @@ function updateSimTable(){
     cells[2].el.textContent = fmtNum(p.price,3);
     cells[3].el.textContent = fmtNum(c.mv,0);
     cells[4].el.textContent = fmtPct(totalNow>0?c.mv/totalNow:null);
+    // 当前类别比例: 仅同类首行单元格写入一次(其余行 display:none)
+    if(cells.nowGroup && !nowGroupShown[c.group]){
+      nowGroupShown[c.group]=true;
+      cells.nowGroup.textContent = fmtPct(totalNow>0?(groupNow[c.group]||0)/totalNow:null);
+    }
     cells[5].el.textContent = fmtNum(adjQty,0); cells[5].el.style.color=cls;
     cells[6].el.textContent = fmtNum(adjAmt,0); cells[6].el.style.color=cls;
     cells[7].el.textContent = fmtNum(c.mvAfter,0);
@@ -414,6 +428,7 @@ function updateSimTable(){
     '<tr><td style="padding:6px 10px;border:1px solid #ddd">合计</td>'+
     '<td style="border:1px solid #ddd"></td><td style="border:1px solid #ddd"></td>'+
     '<td style="padding:6px 10px;border:1px solid #ddd;text-align:right">'+fmtNum(totalNow,0)+'</td>'+
+    '<td style="padding:6px 10px;border:1px solid #ddd;text-align:right">100%</td>'+
     '<td style="padding:6px 10px;border:1px solid #ddd;text-align:right">100%</td>'+
     '<td style="border:1px solid #ddd"></td>'+
     '<td style="border:1px solid #ddd"></td>'+
@@ -440,6 +455,7 @@ fetchAndRender();
       <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">当前价格</th>
       <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">当前市值</th>
       <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">当前比例</th>
+      <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">当前类别比例</th>
       <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">拟持仓</th>
       <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">调整数量</th>
       <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">调整金额</th>
