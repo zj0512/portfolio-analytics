@@ -20,6 +20,23 @@ def api_daily():
                     "daily": calcs.compute_daily()})
 
 
+@app.route("/api/positions")
+def api_positions():
+    """最新持仓与价格: 每只基金当前持仓数量 + 最新净值。"""
+    daily = calcs.compute_daily()
+    if not daily:
+        return jsonify({"ok": False, "error": "无数据"})
+    last = daily[-1]
+    rows = []
+    for code in FUNDS:
+        navs = db.nav_all(code)
+        price = float(navs[-1][1]) if navs else None
+        pos = (last.get("pos") or {}).get(code, 0)
+        rows.append({"code": code, "name": FUNDS[code], "pos": pos,
+                     "price": price, "price_date": navs[-1][0] if navs else None})
+    return jsonify({"ok": True, "date": last["d"], "positions": rows})
+
+
 @app.route("/api/benchmark")
 def api_benchmark():
     return jsonify(calcs.compute_benchmark())
@@ -77,6 +94,29 @@ def api_sim_alloc_post():
     if result.get("ok"):
         db.sim_alloc_set(alloc)  # 每次修改实时覆盖
     return jsonify(result)
+
+
+@app.route("/api/sim_targets", methods=["GET"])
+def api_sim_targets_get():
+    """拟持仓目标值 {code:number}。"""
+    return jsonify({"ok": True, "targets": db.sim_targets_get() or {}})
+
+
+@app.route("/api/sim_targets", methods=["POST"])
+def api_sim_targets_post():
+    body = request.get_json(force=True)
+    targets = body.get("targets")
+    if not isinstance(targets, dict):
+        return jsonify({"ok": False, "error": "targets 必须是 {code:number} 对象"})
+    clean = {}
+    for k, v in targets.items():
+        if k in FUNDS:
+            try:
+                clean[k] = float(v)
+            except (TypeError, ValueError):
+                pass
+    db.sim_targets_set(clean)
+    return jsonify({"ok": True, "saved": clean})
 
 
 @app.route("/api/sync", methods=["POST"])

@@ -287,6 +287,23 @@ def compute_benchmark():
                              "pct": date_pct[dd]})
     return {"ok": True, "index_name": "上证指数", "bench_xirr": bench_series}
 
+@app.route("/api/positions")
+def api_positions():
+    """最新持仓与价格: 每只基金当前持仓数量 + 最新净值。"""
+    data = compute_daily()
+    if not data.get("daily"):
+        return jsonify({"ok": False, "error": "无数据"})
+    last = data["daily"][-1]
+    load_nav()
+    rows = []
+    for code in CORE:
+        navs = _nav_sorted[code]
+        price = float(navs[-1][1]) if navs else None
+        pos = last["pos"].get(code, 0)
+        rows.append({"code": code, "name": FUNDS[code], "pos": pos,
+                     "price": price, "price_date": navs[-1][0] if navs else None})
+    return jsonify({"ok": True, "date": last["d"], "positions": rows})
+
 @app.route("/api/benchmark")
 def api_benchmark():
     return jsonify(compute_benchmark())

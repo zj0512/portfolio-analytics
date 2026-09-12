@@ -187,6 +187,6 @@ def compute_fund_daily(code):
             continue
         mv = pos * nv
         yr = xirr(flow_cf, dd, mv, min_days=15) if mv > 0 else None
-        series.append({"d": dd, "mv": round(mv, 2),
+        series.append({"d": dd, "mv": round(mv, 2), "pos": round(pos, 2),
                        "xirr": round(yr, 2) if yr is not None else None})
     return {"ok": True, "code": code, "name": FUNDS.get(code, code), "series": series}

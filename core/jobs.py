@@ -34,6 +34,18 @@ def register_jobs(scheduler):
         replace_existing=True,
         misfire_grace_time=3600,
     )
+    # 晚间补跑: 基金净值通常 19~22 点才在东财发布, 15:02 抓不到当天
+    scheduler.add_job(
+        _daily_sync_job,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour=21,
+        minute=2,
+        id="daily_nav_update_evening",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    log.info("已注册定时任务: 工作日 21:02 晚间补跑净值更新")
     log.info("已注册定时任务: 工作日15:02 更新净值")
 
 

@@ -343,14 +343,14 @@ function buildSimTable(){
     const mkNum=(align)=>{const t=document.createElement('td');t.style.cssText='padding:5px 10px;border:1px solid #ddd;text-align:right';tr.appendChild(t);cells.push({el:t});return t;};
     // cells[1]=当前持仓, [2]=当前价格, [3]=当前市值, [4]=当前比例
     mkNum(); mkNum(); mkNum(); mkNum();
-    // 当前类别比例列(同类合并, 首行 rowspan)
-    const gtNow = document.createElement('td');
+    // 当前类别比例列(同类合并, 首行 rowspan; 非首行不渲染单元格)
     if(!seenGroupNow[r.group]){
       seenGroupNow[r.group]=true;
+      const gtNow = document.createElement('td');
       if(groupCount[r.group]>1) gtNow.rowSpan = groupCount[r.group];
-    } else { gtNow.style.display='none'; }
-    gtNow.style.cssText='padding:5px 10px;border:1px solid #ddd;text-align:right;vertical-align:middle';
-    tr.appendChild(gtNow); cells.nowGroup = gtNow;
+      gtNow.style.cssText='padding:5px 10px;border:1px solid #ddd;text-align:right;vertical-align:middle';
+      tr.appendChild(gtNow); cells.nowGroup = gtNow;
+    }
     // 第5列: 拟持仓输入框(永久 DOM)
     const td = document.createElement('td');
     td.style.cssText='padding:2px 6px;border:1px solid #ddd';

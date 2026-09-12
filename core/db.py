@@ -114,11 +114,15 @@ def core_flows():
 
 
 def fund_flows_trades(code):
-    """单只基金: 现金流 [(date, amt)] 与交易 [(date, price, qty, occur)]。"""
+    """单只基金: 现金流 [(date, amt)] 与交易 [(date, price, qty, occur)]。
+    对账单 + holdings 手动录入合并。"""
     conn = _conn(DZ_DB)
     recs = conn.execute(
         "SELECT trade_date, price, qty, occur_amount FROM duizhang_record"
         " WHERE sec_code=? ORDER BY trade_date", (code,)).fetchall()
+    holds = conn.execute(
+        "SELECT hdate, action, qty, price FROM holdings WHERE sec_code=? ORDER BY hdate",
+        (code,)).fetchall()
     conn.close()
     flows, trades = [], []
     for d, price, qty, occur in recs:
@@ -133,6 +137,25 @@ def fund_flows_trades(code):
         dd = norm_date(d)
         flows.append((dd, o))
         trades.append((dd, p, q, o))
+    for hd, haction, hqty, hprice in holds:
+        try:
+            hq = float(hqty) if hqty else 0.0
+            hp = float(hprice) if hprice else 0.0
+        except (TypeError, ValueError):
+            continue
+        if hq == 0:
+            continue
+        dd = norm_date(hd)
+        if haction == "BUY":
+            o = -(hq * hp) if hp > 0 else -1.0
+        elif haction == "SELL":
+            o = (hq * hp) if hp > 0 else 1.0
+        else:
+            continue
+        flows.append((dd, o))
+        trades.append((dd, hp, hq, o))
+    flows.sort()
+    trades.sort(key=lambda x: x[0])
     return flows, trades
 
 
@@ -157,6 +180,32 @@ def sim_alloc_get():
     row = conn.execute("SELECT payload FROM sim_alloc WHERE id=1").fetchone()
     conn.close()
     return json.loads(row[0]) if row and row[0] else None
+
+
+def sim_targets_get():
+    """拟持仓目标值 {code: number}, 独立表单行存储。"""
+    conn = _conn(DB)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS sim_targets (id INTEGER PRIMARY KEY CHECK(id=1),"
+        " payload TEXT, updated_at TEXT)")
+    row = conn.execute("SELECT payload FROM sim_targets WHERE id=1").fetchone()
+    conn.close()
+    try:
+        return json.loads(row[0]) if row and row[0] else None
+    except (ValueError, TypeError):
+        return None
+
+
+def sim_targets_set(targets):
+    conn = _conn(DB)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS sim_targets (id INTEGER PRIMARY KEY CHECK(id=1),"
+        " payload TEXT, updated_at TEXT)")
+    conn.execute(
+        "INSERT OR REPLACE INTO sim_targets (id, payload, updated_at) VALUES (1,?,?)",
+        (json.dumps(targets, ensure_ascii=False), now_str()))
+    conn.commit()
+    conn.close()
 
 
 def sim_alloc_set(payload):
