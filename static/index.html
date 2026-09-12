@@ -52,7 +52,8 @@
     <span style="margin-left:8px">自定义:</span>
     <input type="date" id="r_from"> ~ <input type="date" id="r_to">
   </div>
-  <div style="margin-bottom:8px"><b>整体日年化(XIRR)</b></div>
+  <div style="margin-bottom:8px"><b>整体日年化(XIRR)</b> <span style="color:#888;font-size:12px">勾选参与计算的基金(默认不含国开债/短融ETF)</span></div>
+  <div id="core_sel" class="funds" style="margin-bottom:8px"></div>
   <div class="chart" id="overall"></div>
 </div>
 
@@ -147,6 +148,30 @@ document.getElementById('r_from').onchange = ()=>{curRange.days=0;curRange.from=
 document.getElementById('r_to').onchange = ()=>{curRange.days=0;curRange.to=document.getElementById('r_to').value||null;
   document.querySelectorAll('.range-btn:not(.fr)').forEach(x=>x.classList.remove('active'));renderAll();};
 
+ // ---------- 整体年化基金选择 ----------
+ const CORE_EXCLUDE_DEFAULT = ['159649','511360'];  // 默认不含: 国开债/短融ETF
+ function coreSelCodes(){
+   try{ const s = JSON.parse(localStorage.getItem('core_sel')||'null'); if(Array.isArray(s)&&s.length) return s.filter(c=>FUNDS[c]); }catch(e){}
+   return Object.keys(FUNDS).filter(c=>CORE_EXCLUDE_DEFAULT.indexOf(c)<0);
+ }
+ function buildCoreSel(){
+   const sel = document.getElementById('core_sel'); sel.innerHTML='';
+   const codes = coreSelCodes();
+   Object.keys(FUNDS).forEach(code=>{
+     const b = document.createElement('div');
+     b.className='fund-btn'+(codes.indexOf(code)>=0?' active':'');
+     b.textContent=FUNDS[code]; b.dataset.code=code;
+     b.onclick=()=>{
+       const cur = coreSelCodes();
+       const i = cur.indexOf(code);
+       if(i>=0) cur.splice(i,1); else cur.push(code);
+       localStorage.setItem('core_sel', JSON.stringify(cur));
+       buildCoreSel(); fetchDaily();
+     };
+     sel.appendChild(b);
+   });
+ }
+
 // ---------- 数据加载 ----------
 function loadFunds(data){
   FUNDS = data.funds||{};
@@ -221,6 +246,15 @@ function renderAll(){
   },true);
 }
 
+async function fetchDaily(){
+  if(!Object.keys(FUNDS).length) return;
+  const codes = coreSelCodes();
+  const r = await fetch('/api/daily'+(codes.length?('?codes='+codes.join(',')):''));
+  const data = await r.json();
+  lastDaily = data.daily||[];
+  renderAll();
+}
+
 async function fetchAndRender(){
   const r = await fetch('/api/daily');
   const data = await r.json();
@@ -229,6 +263,8 @@ async function fetchAndRender(){
   loadFunds(data);
   lastDaily = data.daily||[];
   lastBench = (bench&&bench.bench_xirr)||[];
+  buildCoreSel();
+  fetchDaily();   // 按选择的基金重取
   renderAll();
   renderFund(DEFAULT_FUND);   // 单只基金默认创业50
   initSim();                  // 基金列表就绪后再初始化比例调整预测表单

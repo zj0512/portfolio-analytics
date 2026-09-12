@@ -16,8 +16,11 @@ def index():
 
 @app.route("/api/daily")
 def api_daily():
+    """codes: 逗号分隔的基金代码, 缺省=全部。"""
+    codes = request.args.get("codes", "")
+    sel = [c for c in codes.split(",") if c in FUNDS] if codes else None
     return jsonify({"funds": FUNDS, "default_fund": DEFAULT_FUND,
-                    "daily": calcs.compute_daily_cached()})
+                    "daily": calcs.compute_daily_cached(sel)})
 
 
 @app.route("/api/positions")

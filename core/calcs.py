@@ -9,9 +9,9 @@ from collections import defaultdict
 from . import db
 from .config import CORE, FUNDS, INDEX_NAME
 
-# compute_daily 结果短 TTL 缓存: 页面首屏 /api/daily 与 /api/positions 各调一次,
+# compute_daily 结果短 TTL 缓存: 按基金选择集分桶,
 # 净值每日只更新一次, 30s 缓存足够新鲜且免重复计算
-_cache = {"lock": threading.Lock(), "t": 0.0, "val": None}
+_cache = {"lock": threading.Lock(), "map": {}}
 _CACHE_TTL = 30.0
 
 
@@ -73,16 +73,28 @@ class _NavCursor:
         return None
 
 
-def compute_daily():
-    """整体组合: 每日 {d, mv, xirr, pos}。增量维护持仓, 曲线延伸到净值库最新日。"""
-    flows = db.core_flows()
-    recs = db.core_trades()
-    nav = {c: db.nav_all(c) for c in CORE}
+def compute_daily(codes=None):
+    """整体组合: 每日 {d, mv, xirr, pos}。增量维护持仓, 曲线延伸到净值库最新日。
+    codes: 参与计算的基金代码列表, None=全部。"""
+    core = [c for c in (codes or CORE) if c in CORE]
+    if not core:
+        core = list(CORE)
+    # 只保留所选基金的现金流与交易(逐基金重取, 含手动录入合并)
+    flows = []
+    for c in core:
+        f, _ = db.fund_flows_trades(c)
+        flows.extend(f)
+    flows.sort()
+    recs_all = db.core_trades()
+    recs = [(d, c, p, q, o) for d, c, p, q, o in recs_all if c in core]
+    nav = {c: db.nav_all(c) for c in core}
     all_dates = db.all_trade_dates()
 
     # 手动录入的持仓变化并入交易重放
     hold = db.holdings_list()
     for h in hold:
+        if h["code"] not in core:   # 未选中的基金不参与重放
+            continue
         try:
             hq = float(h["qty"] or 0)
             hp = float(h["price"] or 0)
@@ -96,7 +108,6 @@ def compute_daily():
         elif h["action"] == "SELL":
             recs.append((h["date"], h["code"], est, hq, hq * est if est else 1.0))
     recs.sort(key=lambda x: (x[0], x[1]))
-
     first_trade = recs[0][0] if recs else None
     dates = [d for d in all_dates if (not first_trade or d >= first_trade)]
 
@@ -107,8 +118,8 @@ def compute_daily():
     for d, v in flows:
         flow_by_date[d].append(v)
 
-    cursors = {c: _NavCursor(nav[c]) for c in CORE}
-    pos = {c: 0.0 for c in CORE}
+    cursors = {c: _NavCursor(nav[c]) for c in core}
+    pos = {c: 0.0 for c in core}
     flow_cf = []
     out = []
     prev_yr = None  # 上日解(小数), 作下一日二分初值
@@ -121,7 +132,7 @@ def compute_daily():
                     pos[code] -= q
         flow_cf.extend((dd, v) for v in flow_by_date.get(dd, []))
         total = 0.0
-        for code in CORE:
+        for code in core:
             if pos[code] == 0:
                 continue
             nv = cursors[code].at(dd)
@@ -132,18 +143,21 @@ def compute_daily():
             prev_yr = yr / 100.0
         out.append({"d": dd, "mv": round(total, 2),
                     "xirr": round(yr, 2) if yr is not None else None,
-                    "pos": {c: int(pos[c]) for c in CORE if pos[c] != 0}})
+                    "pos": {c: int(pos[c]) for c in core if pos[c] != 0}})
     return out
 
 
-def compute_daily_cached():
-    """compute_daily 的 30s TTL 缓存封装。"""
+def compute_daily_cached(codes=None):
+    """compute_daily 的 30s TTL 缓存封装, 按基金集合分桶。"""
+    key = frozenset(codes) if codes else frozenset(CORE)
+    now = time.time()
     with _cache["lock"]:
-        if _cache["val"] is not None and time.time() - _cache["t"] < _CACHE_TTL:
-            return _cache["val"]
-    val = compute_daily()
+        ent = _cache["map"].get(key)
+        if ent is not None and now - ent[1] < _CACHE_TTL:
+            return ent[0]
+    val = compute_daily(codes)
     with _cache["lock"]:
-        _cache["val"], _cache["t"] = val, time.time()
+        _cache["map"][key] = (val, time.time())
     return val
 
 
