@@ -231,6 +231,7 @@ async function fetchAndRender(){
   lastBench = (bench&&bench.bench_xirr)||[];
   renderAll();
   renderFund(DEFAULT_FUND);   // 单只基金默认创业50
+  initSim();                  // 基金列表就绪后再初始化比例调整预测表单
 }
 
 let curFundCode = null;
@@ -247,10 +248,11 @@ async function renderFund(code){
   const all = d.series||[];
   const last = all[all.length-1]||{};
   const currMv = last.mv!=null ? ' · 当前市值 '+(last.mv/10000).toFixed(1)+'万' : '';
-  const title = (d.name||code)+' 个人年化(XIRR)'+currMv;
+  const currPos = last.pos!=null ? ' · 持仓 '+last.pos : '';
+  const title = (d.name||code)+' 个人年化(XIRR)'+currPos+currMv;
   fundChart.setOption({
     title:{text:title,left:'center',textStyle:{fontSize:15}},
-    tooltip:{trigger:'axis',formatter:function(ps){const p=ps[0];const v=p.value;return p.name+'<br/>个人年化:'+(v==null?'—':v.toFixed(2)+'%');}},
+    tooltip:{trigger:'axis',formatter:function(ps){const p=ps[0];const idx=p.dataIndex;const pt=series[idx]||{};const v=p.value;return p.name+'<br/>个人年化:'+(v==null?'—':v.toFixed(2)+'%')+'<br/>持仓:'+(pt.pos==null?'—':pt.pos)+'<br/>市值:'+(pt.mv==null?'—':(pt.mv/10000).toFixed(2)+'万');}},
     grid:{left:60,right:30,top:50,bottom:50},
     xAxis:{type:'category',data:days,axisLabel:{rotate:45,fontSize:10},boundaryGap:false},
     yAxis:{type:'value',name:'年化%',axisLabel:{formatter:'{value}%'}},
@@ -274,85 +276,182 @@ document.getElementById('btn_submit').onclick = async ()=>{
 };
 document.getElementById('btn_refresh').onclick = fetchAndRender;
 
-// ---------- 比例调整预测 ----------
-let simChart;
-function buildSimForm(saved){
-  const box = document.getElementById('sim_form');
-  box.innerHTML='';
-  Object.keys(FUNDS).forEach(code=>{
-    const d=document.createElement('div');
-    d.innerHTML='<label>'+FUNDS[code]+'</label>'+
-      '<input type="number" min="0" max="100" step="0.5" data-code="'+code+'" value="'+((saved&&saved[code]!=null)?saved[code]:'')+'" placeholder="0">';
-    box.appendChild(d);
-  });
-}
-function collectSimAlloc(){
-  const alloc={}; let sum=0;
-  document.querySelectorAll('#sim_form input').forEach(inp=>{
-    const v=parseFloat(inp.value);
-    if(v>0){alloc[inp.dataset.code]=v; sum+=v;}
-  });
-  return {alloc,sum};
-}
-async function runSim(){
-  const {alloc,sum}=collectSimAlloc();
-  const msg=document.getElementById('sim_msg');
-  if(!Object.keys(alloc).length){msg.textContent='请至少给一个基金填入大于0的权重';msg.style.color='#c0392b';return;}
-  msg.style.color='#8e44ad';
-  msg.textContent='计算中...';
-  const r=await fetch('/api/sim_alloc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({alloc})});
-  const d=await r.json();
-  if(!d.ok){msg.textContent='错误: '+d.error;msg.style.color='#c0392b';return;}
-  msg.textContent='已保存并计算完成';
-  const s=d.summary||{};
-  document.getElementById('sim_sum').innerHTML=
-    '回放区间 '+s.start+' ~ '+(s.end||'')+
-    ' · 模拟年化 <b style="color:#8e44ad">'+(s.sim_last_xirr==null?'—':s.sim_last_xirr+'%')+'</b>'+
-    ' · 实际年化 '+(s.actual_last_xirr==null?'—':s.actual_last_xirr+'%')+
-    (Math.abs(sum-100)>0.01?' · 权重合计'+sum+'%(已自动归一)':'');
-  const xs=(d.series||[]).map(p=>p.d);
-  const sim=(d.series||[]).map(p=>p.xirr==null?null:p.xirr);
-  const actMap={}; (d.actual||[]).forEach(p=>actMap[p.d]=p.pct_xirr==null?null:p.pct_xirr);
-  const act=xs.map(dd=>dd in actMap?actMap[dd]:null);
-  if(!simChart) simChart=echarts.init(document.getElementById('sim_chart'));
-  simChart.setOption({
-    tooltip:{trigger:'axis'},
-    legend:{data:['模拟组合年化','实际组合年化'],top:0,textStyle:{fontSize:11}},
-    grid:{left:60,right:30,top:40,bottom:60},
-    xAxis:{type:'category',data:xs,axisLabel:{rotate:45,fontSize:10},boundaryGap:false},
-    yAxis:{type:'value',name:'年化%',axisLabel:{formatter:'{value}%'}},
-    series:[
-      {name:'模拟组合年化',type:'line',smooth:true,symbol:'none',data:sim,lineStyle:{width:2,color:'#8e44ad'},areaStyle:{color:'#8e44ad',opacity:0.1}},
-      {name:'实际组合年化',type:'line',smooth:true,symbol:'none',data:act,connectNulls:true,lineStyle:{width:1.5,color:'#7f8c8d',type:'dashed'}}
-    ]
-  },true);
-}
-document.getElementById('btn_sim').onclick=runSim;
-// 初始化: 加载已存权重并首次计算
-(async()=>{
+// ---------- 比例调整预测(表格) ----------
+// 类别分组: 同类基金的调整后市值合并算比例
+const SIM_GROUPS = [
+  {name:'国债/短融', codes:['511090','511130','511360','159649']},
+  {name:'A股宽基/红利', codes:['159682','159593','515180','563020']},
+  {name:'美股', codes:['513100','513650']},
+  {name:'半导体', codes:['159516']},
+  {name:'黄金', codes:['518880','159937']},
+];
+let simPositions = [];
+let simInited = false;
+function fmtNum(v, d){ return (v==null||isNaN(v)) ? '—' : Number(v).toLocaleString('zh-CN',{minimumFractionDigits:d,maximumFractionDigits:d}); }
+function fmtPct(v){ return (v==null||isNaN(v)) ? '—' : (v*100).toFixed(1)+'%'; }
+
+async function initSim(){
+  if(simInited) return; simInited = true;
   try{
-    const d=await fetch('/api/sim_alloc').then(r=>r.json());
-    buildSimForm(d.alloc);
-    if(d.alloc&&Object.keys(d.alloc).length) runSim();
-  }catch(e){ buildSimForm(null); }
-})();
+    const d = await fetch('/api/positions').then(r=>r.json());
+    if(!d.ok){ document.getElementById('sim_msg').textContent = '加载持仓失败: '+(d.error||''); return; }
+    simPositions = d.positions||[];
+    document.getElementById('pos_date').textContent = '数据日期 '+d.date;
+    // 从后端恢复已保存的拟持仓值
+    try{
+      const sv = await fetch('/api/sim_targets').then(r=>r.json());
+      if(sv && sv.ok && sv.targets){ simTargets = sv.targets; }
+    }catch(e){}
+    buildSimTable();
+    updateSimTable();
+  }catch(e){ document.getElementById('sim_msg').textContent = '加载持仓失败: '+e; }
+}
+
+// 拟持仓目标值状态(独立于 DOM): 留空 = 维持当前持仓
+let simTargets = {};   // {code: number}
+let simRows = [];      // 每行的单元格引用, 供局部更新
+let simSaveTimer = null;
+
+function simSaveTargets(){
+  // 防抖保存到数据库, 刷新页面自动恢复
+  clearTimeout(simSaveTimer);
+  simSaveTimer = setTimeout(()=>{
+    fetch('/api/sim_targets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targets:simTargets})}).catch(()=>{});
+  }, 500);
+}
+
+// 表格只构建一次: 输入框与单元格引用固定, 之后永不重建 DOM
+function buildSimTable(){
+  const tbody = document.getElementById('sim_body');
+  tbody.innerHTML='';
+  const codeGroup = {};
+  SIM_GROUPS.forEach(g=>g.codes.forEach(c=>codeGroup[c]=g.name));
+  const groupOrder = SIM_GROUPS.map(g=>g.name).concat(['其他']);
+  const rows = simPositions.map(p=>({p, group: codeGroup[p.code]||'其他'}));
+  rows.sort((a,b)=>groupOrder.indexOf(a.group)-groupOrder.indexOf(b.group));
+  const groupCount = {};
+  rows.forEach(r=>{ groupCount[r.group]=(groupCount[r.group]||0)+1; });
+  const seenGroup = {};
+  simRows = [];
+  rows.forEach(r=>{
+    const tr = document.createElement('tr');
+    const cells = [];
+    // 前四列: 名称/持仓/价格/市值
+    const t1 = document.createElement('td');
+    t1.style.cssText='padding:5px 10px;border:1px solid #ddd';
+    t1.textContent = r.p.name; tr.appendChild(t1); cells.push({el:t1});
+    const mkNum=(align)=>{const t=document.createElement('td');t.style.cssText='padding:5px 10px;border:1px solid #ddd;text-align:right';tr.appendChild(t);cells.push({el:t});return t;};
+    // cells[1]=当前持仓, [2]=当前价格, [3]=当前市值, [4]=当前比例
+    mkNum(); mkNum(); mkNum(); mkNum();
+    // 第5列: 拟持仓输入框(永久 DOM)
+    const td = document.createElement('td');
+    td.style.cssText='padding:2px 6px;border:1px solid #ddd';
+    const inp = document.createElement('input');
+    inp.type='number'; inp.step='any'; inp.min='0'; inp.dataset.code=r.p.code;
+    inp.style.cssText='width:110px;padding:4px 6px;border:1px solid #ddd;border-radius:4px;text-align:right;font-size:13px';
+    // 从数据库恢复的拟持仓值回填到输入框(不主动更改不会变)
+    if(simTargets[r.p.code]!=null) inp.value = simTargets[r.p.code];
+    inp.addEventListener('input', function(){
+      const v = this.value==='' ? null : parseFloat(this.value);
+      if(v==null||isNaN(v)){ delete simTargets[this.dataset.code]; }
+      else { simTargets[this.dataset.code]=v; }
+      updateSimTable();
+      simSaveTargets();
+    });
+    td.appendChild(inp); tr.appendChild(td);
+    // 第7-10列(cells[5]-[8]): 调整数量/调整金额/调整后市值/调整后比例
+    for(let k=0;k<4;k++){ mkNum(); }
+    // 第10列: 类别合并框(同类第一行 rowspan)
+    if(!seenGroup[r.group]){
+      seenGroup[r.group]=true;
+      const gt = document.createElement('td');
+      if(groupCount[r.group]>1) gt.rowSpan = groupCount[r.group];
+      gt.style.cssText='padding:5px 10px;border:1px solid #ddd;vertical-align:middle;background:#fafafa';
+      gt.innerHTML='<b>'+r.group+'</b><br><span class="g_pct" style="color:#c0392b;font-size:15px"></span><br><span class="g_mv" style="color:#888;font-size:12px"></span>';
+      cells.groupCell = {pct: gt.querySelector('.g_pct'), mv: gt.querySelector('.g_mv'), name: r.group};
+      tr.appendChild(gt);
+    }
+    tbody.appendChild(tr);
+    simRows.push({r, cells, inp});
+  });
+}
+
+// 只更新数字, 不动 DOM 结构, 输入框焦点不丢
+function updateSimTable(){
+  const calc = simRows.map(o=>{
+    const p = o.r.p;
+    const target = simTargets[p.code]!=null ? simTargets[p.code] : p.pos;
+    const mv = (p.pos||0)*(p.price||0);
+    const mvAfter = (target||0)*(p.price||0);
+    return {target: isNaN(target)?0:target, mv, mvAfter, group: o.r.group, p};
+  });
+  const totalAfter = calc.reduce((s,r)=>s+r.mvAfter,0);
+  const totalNow = calc.reduce((s,r)=>s+r.mv,0);
+  const totalAdj = calc.reduce((s,r)=>s+(r.target-r.p.pos)*(r.p.price||0),0);
+  const groupSum = {}, groupNow = {};
+  calc.forEach(r=>{ groupSum[r.group]=(groupSum[r.group]||0)+r.mvAfter; groupNow[r.group]=(groupNow[r.group]||0)+r.mv; });
+  const gCells = {};
+  simRows.forEach((o,i)=>{
+    const c = calc[i], p = c.p, cells = o.cells;
+    const adjQty = c.target - p.pos;
+    const adjAmt = adjQty * (p.price||0);
+    const cls = adjQty>0 ? '#c0392b' : (adjQty<0 ? '#27ae60' : '');
+    cells[1].el.textContent = fmtNum(p.pos,0);
+    cells[2].el.textContent = fmtNum(p.price,3);
+    cells[3].el.textContent = fmtNum(c.mv,0);
+    cells[4].el.textContent = fmtPct(totalNow>0?c.mv/totalNow:null);
+    cells[5].el.textContent = fmtNum(adjQty,0); cells[5].el.style.color=cls;
+    cells[6].el.textContent = fmtNum(adjAmt,0); cells[6].el.style.color=cls;
+    cells[7].el.textContent = fmtNum(c.mvAfter,0);
+    cells[8].el.textContent = fmtPct(totalAfter>0?c.mvAfter/totalAfter:null);
+    if(cells.groupCell) gCells[cells.groupCell.name]=cells.groupCell;
+  });
+  Object.keys(gCells).forEach(g=>{
+    gCells[g].pct.textContent = fmtPct(totalAfter>0?(groupSum[g]||0)/totalAfter:null);
+    gCells[g].mv.textContent = fmtNum(groupSum[g]||0,0)+'元';
+  });
+  document.getElementById('sim_foot').innerHTML =
+    '<tr><td style="padding:6px 10px;border:1px solid #ddd">合计</td>'+
+    '<td style="border:1px solid #ddd"></td><td style="border:1px solid #ddd"></td>'+
+    '<td style="padding:6px 10px;border:1px solid #ddd;text-align:right">'+fmtNum(totalNow,0)+'</td>'+
+    '<td style="padding:6px 10px;border:1px solid #ddd;text-align:right">100%</td>'+
+    '<td style="border:1px solid #ddd"></td>'+
+    '<td style="border:1px solid #ddd"></td>'+
+    '<td style="padding:6px 10px;border:1px solid #ddd;text-align:right;color:'+(totalAdj>0?'#c0392b':'#27ae60')+'">'+fmtNum(totalAdj,0)+'</td>'+
+    '<td style="padding:6px 10px;border:1px solid #ddd;text-align:right">'+fmtNum(totalAfter,0)+'</td>'+
+    '<td style="padding:6px 10px;border:1px solid #ddd;text-align:right">100%</td><td style="border:1px solid #ddd"></td></tr>';
+  document.getElementById('sim_msg').textContent = '拟持仓列直接输入数字,自动重算并保存;留空 = 维持当前持仓。红=买入,绿=卖出。';
+}
 
 // 录入页日期默认今天
 document.getElementById('f_date').value = new Date().toISOString().slice(0,10);
 
-window.addEventListener('resize',()=>{overallChart&&overallChart.resize();mvChart&&mvChart.resize();fundChart&&fundChart.resize();simChart&&simChart.resize();});
+window.addEventListener('resize',()=>{overallChart&&overallChart.resize();mvChart&&mvChart.resize();fundChart&&fundChart.resize();});
 
 fetchAndRender();
 </script>
 <div class="card">
-  <div style="margin-bottom:8px"><b>比例调整预测</b> <span style="color:#888;font-size:12px">按目标权重每日再平衡回放历史净值 · 修改实时保存</span></div>
-  <div id="sim_form" class="form" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))"></div>
-  <div style="display:flex;gap:10px;align-items:center;margin-top:10px">
-    <button id="btn_sim" style="padding:8px 20px;background:#8e44ad;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:bold">模拟计算</button>
-    <span id="sim_sum" style="font-size:13px;color:#555"></span>
+  <div style="margin-bottom:8px"><b>比例调整预测</b> <span style="color:#888;font-size:12px" id="pos_date"></span></div>
+  <div style="overflow-x:auto">
+  <table id="sim_table" style="border-collapse:collapse;width:100%;font-size:13px;white-space:nowrap">
+    <thead><tr style="background:#f0f0f0">
+      <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">基金名称</th>
+      <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">当前持仓</th>
+      <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">当前价格</th>
+      <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">当前市值</th>
+      <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">当前比例</th>
+      <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">拟持仓</th>
+      <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">调整数量</th>
+      <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">调整金额</th>
+      <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">调整后市值</th>
+      <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">调整后比例</th>
+      <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">类别比例</th>
+    </tr></thead>
+    <tbody id="sim_body"></tbody>
+    <tfoot id="sim_foot" style="font-weight:bold;background:#fafafa"></tfoot>
+  </table>
   </div>
-  <div id="sim_msg" style="font-size:12px;color:#8e44ad;margin-top:6px"></div>
-  <div class="chart" id="sim_chart"></div>
+  <div id="sim_msg" style="font-size:12px;color:#555;margin-top:6px"></div>
 </div>
 
 </body>
