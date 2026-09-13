@@ -19,6 +19,7 @@ EM_F10 = "http://api.fund.eastmoney.com/f10/lsjz?fundCode=%s&pageIndex=%s&pageSi
 EM_KLINE = ("http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.000001"
             "&fields1=f1,f2,f3&fields2=f51,f53&klt=101&fqt=0&beg=%s&end=20500101")
 TX_QUOTE = "http://qt.gtimg.cn/q=sh000001"
+TX_ETF_QUOTE = "http://qt.gtimg.cn/q=%s"
 
 
 def _get_json(url, referer, retries=3):
@@ -146,6 +147,55 @@ def sync_index(start_date=None):
     return len(rows)
 
 
+def _mkt_prefix(code):
+    """深沪市场前缀: 5开头=上海, 其余=深圳。"""
+    return "sh" if code.startswith("5") else "sz"
+
+
+def fetch_prices(codes):
+    """腾讯实时行情批量抓基金/ETF最新成交价。返回 {code:(date, price)}。"""
+    qs = ",".join(_mkt_prefix(c) + c for c in codes)
+    req = urllib.request.Request(TX_ETF_QUOTE % qs, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        txt = r.read().decode("gbk", errors="ignore")
+    out = {}
+    for seg in txt.split(";"):
+        seg = seg.strip()
+        if "~" not in seg:
+            continue
+        f = seg.split("~")
+        code = f[2] if len(f) > 2 and f[2].isdigit() and len(f[2]) == 6 else ""
+        try:
+            price = float(f[3])
+            ts = f[30][:8]
+        except (IndexError, ValueError):
+            continue
+        if not code or price <= 0 or len(ts) != 8 or not ts.isdigit():
+            continue
+        dd = "%s-%s-%s" % (ts[0:4], ts[4:6], ts[6:8])
+        out[code] = (dd, price)
+    return out
+
+
+def sync_prices():
+    """抓全部基金最新成交价写入 fund_price 表(与净值同频定时调用, 逐日累积)。
+    返回写入条数。"""
+    data = fetch_prices(list(FUNDS.keys()))
+    n = 0
+    if data:
+        conn = sqlite3.connect(DB)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS fund_price (fund_code TEXT, fsrq TEXT,"
+            " price REAL, PRIMARY KEY(fund_code, fsrq))")
+        conn.executemany(
+            "INSERT OR REPLACE INTO fund_price (fund_code, fsrq, price) VALUES (?,?,?)",
+            [(c, d, p) for c, (d, p) in data.items()])
+        conn.commit()
+        conn.close()
+        n = len(data)
+    return n
+
+
 def sync_on_startup():
     """启动时主动同步: 补齐从库里最后日期到今天的数据(解决停机缺口)。"""
     total = {}
@@ -159,6 +209,11 @@ def sync_on_startup():
                 total[code] = -1
         n_idx = sync_index()
         total["index"] = n_idx
+        try:
+            total["prices"] = sync_prices()
+        except Exception as e:
+            log.error("成交价同步失败: %s", e)
+            total["prices"] = -1
         log.info("启动同步完成: %s", total)
     except Exception as e:
         log.error("启动同步异常: %s", e)

@@ -88,6 +88,7 @@ def compute_daily(codes=None):
     recs_all = db.core_trades()
     recs = [(d, c, p, q, o) for d, c, p, q, o in recs_all if c in core]
     nav = {c: db.nav_all(c) for c in core}
+    price = {c: db.price_all(c) for c in core}
     all_dates = db.all_trade_dates()
 
     # 手动录入的持仓变化并入交易重放
@@ -119,6 +120,7 @@ def compute_daily(codes=None):
         flow_by_date[d].append(v)
 
     cursors = {c: _NavCursor(nav[c]) for c in core}
+    pcursors = {c: _NavCursor(price[c]) for c in core}
     pos = {c: 0.0 for c in core}
     flow_cf = []
     out = []
@@ -135,7 +137,9 @@ def compute_daily(codes=None):
         for code in core:
             if pos[code] == 0:
                 continue
-            nv = cursors[code].at(dd)
+            # 估值优先用交易价格(最新成交价), 无价格记录的日期回退净值
+            pv = pcursors[code].at(dd)
+            nv = pv if pv is not None else cursors[code].at(dd)
             if nv is not None:
                 total += pos[code] * nv
         yr = xirr(flow_cf, dd, total, prev_rate=prev_yr) if total > 0 else None
@@ -222,6 +226,7 @@ def compute_fund_daily(code):
     """单基金个人年化曲线(XIRR, 基于该基金现金流+期末市值)。"""
     flows, trades = db.fund_flows_trades(code)
     nav_rows = db.nav_all(code)
+    price_rows = db.price_all(code)
     if not flows:
         return {"ok": False, "error": "无交易记录"}
     first_trade = min(f[0] for f in flows)
@@ -235,6 +240,7 @@ def compute_fund_daily(code):
         flow_by_date[d].append(v)
 
     cursor = _NavCursor(nav_rows)
+    pcursor = _NavCursor(price_rows)
     pos = 0.0
     flow_cf = []
     series = []
@@ -249,7 +255,10 @@ def compute_fund_daily(code):
         nv = cursor.at(dd)
         if nv is None:
             continue
-        mv = pos * nv
+        # 估值优先用交易价格, 无价格记录的日期回退净值
+        pv = pcursor.at(dd)
+        val = pv if pv is not None else nv
+        mv = pos * val
         yr = xirr(flow_cf, dd, mv, min_days=15) if mv > 0 else None
         series.append({"d": dd, "mv": round(mv, 2), "pos": round(pos, 2),
                        "xirr": round(yr, 2) if yr is not None else None})

@@ -18,7 +18,11 @@ def _daily_sync_job():
         for code in FUNDS:
             fetchers.sync_fund(code)
         fetchers.sync_index()
-        log.info("定时净值更新完成")
+        try:
+            fetchers.sync_prices()
+        except Exception as e:
+            log.error("成交价同步失败: %s", e)
+        log.info("定时净值/成交价更新完成")
     except Exception as e:
         log.error("定时净值更新失败: %s", e)
 
@@ -47,6 +51,8 @@ def register_jobs(scheduler):
     )
     log.info("已注册定时任务: 工作日 21:02 晚间补跑净值更新")
     log.info("已注册定时任务: 工作日15:02 更新净值")
+    # 成交价与净值同频更新(15:02/21:02), 逐日累积入 fund_price 表
+    # (已并入 _daily_sync_job)
 
 
 def start_scheduler():

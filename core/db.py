@@ -58,6 +58,31 @@ def all_trade_dates():
     return rows
 
 
+# ---------- 成交价 ----------
+def price_all(code):
+    """某基金成交价序列 [(fsrq, price), ...] 升序。"""
+    conn = _conn(DB)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS fund_price (fund_code TEXT, fsrq TEXT,"
+        " price REAL, PRIMARY KEY(fund_code, fsrq))")
+    rows = conn.execute(
+        "SELECT fsrq, price FROM fund_price WHERE fund_code=? ORDER BY fsrq", (code,)
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def upsert_price(code, fsrq, price):
+    conn = _conn(DB)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS fund_price (fund_code TEXT, fsrq TEXT,"
+        " price REAL, PRIMARY KEY(fund_code, fsrq))")
+    conn.execute(
+        "INSERT OR REPLACE INTO fund_price (fund_code, fsrq, price) VALUES (?,?,?)",
+        (code, fsrq, price))
+    conn.close()
+
+
 # ---------- 对账单 / 持仓 ----------
 def core_trades():
     """核心标的的全部交易记录(对账单 + 手动录入), 统一格式:

@@ -376,8 +376,8 @@ function buildSimTable(){
     t1.style.cssText='padding:5px 10px;border:1px solid #ddd';
     t1.textContent = r.p.name; tr.appendChild(t1); cells.push({el:t1});
     const mkNum=(align)=>{const t=document.createElement('td');t.style.cssText='padding:5px 10px;border:1px solid #ddd;text-align:right';tr.appendChild(t);cells.push({el:t});return t;};
-    // cells[1]=当前持仓, [2]=当前价格, [3]=当前市值, [4]=当前比例
-    mkNum(); mkNum(); mkNum(); mkNum();
+    // cells[1]=当前持仓, [2]=当前价格, [3]=当前净值, [4]=当前市值, [5]=当前比例
+    mkNum(); mkNum(); mkNum(); mkNum(); mkNum();
     // 当前类别比例列(同类合并, 首行 rowspan; 非首行不渲染单元格)
     if(!seenGroupNow[r.group]){
       seenGroupNow[r.group]=true;
@@ -402,7 +402,7 @@ function buildSimTable(){
       simSaveTargets();
     });
     td.appendChild(inp); tr.appendChild(td);
-    // 第7-10列(cells[5]-[8]): 调整数量/调整金额/调整后市值/调整后比例
+    // 第8-11列(cells[6]-[9]): 调整数量/调整金额/调整后市值/调整后比例
     for(let k=0;k<4;k++){ mkNum(); }
     // 第10列: 类别合并框(同类第一行 rowspan)
     if(!seenGroup[r.group]){
@@ -442,17 +442,18 @@ function updateSimTable(){
     const cls = adjQty>0 ? '#c0392b' : (adjQty<0 ? '#27ae60' : '');
     cells[1].el.textContent = fmtNum(p.pos,0);
     cells[2].el.textContent = fmtNum(p.price,3);
-    cells[3].el.textContent = fmtNum(c.mv,0);
-    cells[4].el.textContent = fmtPct(totalNow>0?c.mv/totalNow:null);
+    cells[3].el.textContent = fmtNum(p.nav,3);
+    cells[4].el.textContent = fmtNum(c.mv,0);
+    cells[5].el.textContent = fmtPct(totalNow>0?c.mv/totalNow:null);
     // 当前类别比例: 仅同类首行单元格写入一次(其余行 display:none)
     if(cells.nowGroup && !nowGroupShown[c.group]){
       nowGroupShown[c.group]=true;
       cells.nowGroup.textContent = fmtPct(totalNow>0?(groupNow[c.group]||0)/totalNow:null);
     }
-    cells[5].el.textContent = fmtNum(adjQty,0); cells[5].el.style.color=cls;
-    cells[6].el.textContent = fmtNum(adjAmt,0); cells[6].el.style.color=cls;
-    cells[7].el.textContent = fmtNum(c.mvAfter,0);
-    cells[8].el.textContent = fmtPct(totalAfter>0?c.mvAfter/totalAfter:null);
+    cells[6].el.textContent = fmtNum(adjQty,0); cells[6].el.style.color=cls;
+    cells[7].el.textContent = fmtNum(adjAmt,0); cells[7].el.style.color=cls;
+    cells[8].el.textContent = fmtNum(c.mvAfter,0);
+    cells[9].el.textContent = fmtPct(totalAfter>0?c.mvAfter/totalAfter:null);
     if(cells.groupCell) gCells[cells.groupCell.name]=cells.groupCell;
   });
   Object.keys(gCells).forEach(g=>{
@@ -461,7 +462,7 @@ function updateSimTable(){
   });
   document.getElementById('sim_foot').innerHTML =
     '<tr><td style="padding:6px 10px;border:1px solid #ddd">合计</td>'+
-    '<td style="border:1px solid #ddd"></td><td style="border:1px solid #ddd"></td>'+
+    '<td style="border:1px solid #ddd"></td><td style="border:1px solid #ddd"></td><td style="border:1px solid #ddd"></td>'+
     '<td style="padding:6px 10px;border:1px solid #ddd;text-align:right">'+fmtNum(totalNow,0)+'</td>'+
     '<td style="padding:6px 10px;border:1px solid #ddd;text-align:right">100%</td>'+
     '<td style="padding:6px 10px;border:1px solid #ddd;text-align:right">100%</td>'+
@@ -488,6 +489,7 @@ fetchAndRender();
       <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">基金名称</th>
       <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">当前持仓</th>
       <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">当前价格</th>
+      <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">当前净值</th>
       <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">当前市值</th>
       <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">当前比例</th>
       <th style="padding:6px 10px;border:1px solid #ddd;text-align:right">当前类别比例</th>

@@ -37,10 +37,13 @@ def api_positions():
     rows = []
     for code in FUNDS:
         navs = db.nav_all(code)
-        price = float(navs[-1][1]) if navs else None
+        prices = db.price_all(code)
+        price = float(prices[-1][1]) if prices else None
+        nav = float(navs[-1][1]) if navs else None
         pos = (last.get("pos") or {}).get(code, 0)
         rows.append({"code": code, "name": FUNDS[code], "pos": pos,
-                     "price": price, "price_date": navs[-1][0] if navs else None})
+                     "price": price, "price_date": prices[-1][0] if prices else None,
+                     "nav": nav, "nav_date": navs[-1][0] if navs else None})
     return jsonify({"ok": True, "date": last["d"], "positions": rows})
 
 
