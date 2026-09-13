@@ -52,7 +52,14 @@
     <span style="margin-left:8px">自定义:</span>
     <input type="date" id="r_from"> ~ <input type="date" id="r_to">
   </div>
-  <div style="margin-bottom:8px"><b>整体日年化(XIRR)</b> <span style="color:#888;font-size:12px">勾选参与计算的基金(默认不含国开债/短融ETF)</span></div>
+  <div style="margin-bottom:8px"><b>整体年化(XIRR)</b> <span style="color:#888;font-size:12px">勾选参与计算的基金(默认不含国开债/短融ETF)</span>
+    <span style="margin-left:12px;font-size:12px;color:#888">周期:</span>
+    <span class="gran-btn range-btn active" data-gran="day">日</span>
+    <span class="gran-btn range-btn" data-gran="week">周</span>
+    <span class="gran-btn range-btn" data-gran="month">月</span>
+    <span class="gran-btn range-btn" data-gran="quarter">季</span>
+    <span class="gran-btn range-btn" data-gran="year">年</span>
+  </div>
   <div id="core_sel" class="funds" style="margin-bottom:8px"></div>
   <div class="chart" id="overall"></div>
 </div>
@@ -73,7 +80,14 @@
     <span style="margin-left:8px">自定义:</span>
     <input type="date" id="fr_from"> ~ <input type="date" id="fr_to">
   </div>
-  <div style="margin-bottom:8px"><b>单只基金</b> <span style="color:#888;font-size:12px">点击按钮切换</span></div>
+  <div style="margin-bottom:8px"><b>单只基金</b> <span style="color:#888;font-size:12px">点击按钮切换</span>
+    <span style="margin-left:12px;font-size:12px;color:#888">周期:</span>
+    <span class="fgran-btn range-btn active" data-gran="day">日</span>
+    <span class="fgran-btn range-btn" data-gran="week">周</span>
+    <span class="fgran-btn range-btn" data-gran="month">月</span>
+    <span class="fgran-btn range-btn" data-gran="quarter">季</span>
+    <span class="fgran-btn range-btn" data-gran="year">年</span>
+  </div>
   <div class="funds" id="funds"></div>
   <div class="chart" id="fund"></div>
 </div>
@@ -121,8 +135,39 @@ function fundRangeStart(){
 function fundInRange(d){ return d>=fundRangeStart() && d<=fundRangeEnd(); }
 function fundRangeEnd(){ return curFundRange.to || '2999-12-31'; }
 
+// ---------- 周期汇聚(日/周/月/季/年): 取各周期末最后一个点 ----------
+let curGran = 'day';        // 整体年化周期
+let curFundGran = 'day';    // 单基金年化周期
+function granKey(d, g){
+  if(g==='day') return d;
+  if(g==='week'){
+    const dt = new Date(d+'T00:00:00');
+    dt.setDate(dt.getDate() - ((dt.getDay()+6)%7));   // 对齐到周一
+    return 'W'+dt.toISOString().slice(0,10);
+  }
+  const y = d.slice(0,4), m = +d.slice(5,7);
+  if(g==='month') return y+'-'+d.slice(5,7);
+  if(g==='quarter') return y+'Q'+(Math.floor((m-1)/3)+1);
+  return y;
+}
+function aggregateBy(arr, g){
+  if(g==='day' || !arr.length) return arr;
+  const last = {};   // key -> 点(后写覆盖, 保留周期末值)
+  arr.forEach(p=>{ last[granKey(p.d,g)] = p; });
+  const seen = new Set(); const out = [];
+  arr.forEach(p=>{ const k = granKey(p.d,g); if(!seen.has(k) && last[k]===p){ seen.add(k); out.push(p); } });
+  return out;
+}
+function wireGran(cls, setter, rerender){
+  document.querySelectorAll('.'+cls).forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('.'+cls).forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    setter(b.dataset.gran); rerender();
+  });
+}
+
 function applyRangeBtn(el){
-  document.querySelectorAll('.range-btn:not(.fr)').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.range-btn:not(.fr):not(.gran-btn):not(.fgran-btn)').forEach(x=>x.classList.remove('active'));
   el.classList.add('active');
   curRange.days = parseInt(el.dataset.days||'0');
   curRange.from = curRange.days>0 ? null : document.getElementById('r_from').value||null;
@@ -144,9 +189,9 @@ document.getElementById('fr_to').onchange = ()=>{curFundRange.days=0;curFundRang
   document.querySelectorAll('.range-btn.fr').forEach(x=>x.classList.remove('active'));
   if(curFundCode) renderFund(curFundCode);};
 document.getElementById('r_from').onchange = ()=>{curRange.days=0;curRange.from=document.getElementById('r_from').value||null;
-  document.querySelectorAll('.range-btn:not(.fr)').forEach(x=>x.classList.remove('active'));renderAll();};
+  document.querySelectorAll('.range-btn:not(.fr):not(.gran-btn):not(.fgran-btn)').forEach(x=>x.classList.remove('active'));renderAll();};
 document.getElementById('r_to').onchange = ()=>{curRange.days=0;curRange.to=document.getElementById('r_to').value||null;
-  document.querySelectorAll('.range-btn:not(.fr)').forEach(x=>x.classList.remove('active'));renderAll();};
+  document.querySelectorAll('.range-btn:not(.fr):not(.gran-btn):not(.fgran-btn)').forEach(x=>x.classList.remove('active'));renderAll();};
 
  // ---------- 整体年化基金选择 ----------
  const CORE_EXCLUDE_DEFAULT = ['159649','511360'];  // 默认不含: 国开债/短融ETF
@@ -203,13 +248,13 @@ function filterByRange(arr){
 
 function renderAll(){
   if(!lastDaily.length) return;
-  const daily = filterByRange(lastDaily);
+  const daily = aggregateBy(filterByRange(lastDaily), curGran);
   if(!daily.length) return;
   const xs = daily.map(o=>o.d);
   const xirr = daily.map(o=>o.xirr==null?null:o.xirr);
-  const mv = daily.map(o=>o.mv);
-  // 基准数据(上证指数)
-  const bx = filterByRange(lastBench);
+  const mv = aggregateBy(filterByRange(lastDaily), curGran).map(o=>o.mv);
+  // 基准数据(上证指数, 同周期汇聚)
+  const bx = aggregateBy(filterByRange(lastBench), curGran);
   const bxirr = bx.map(o=>o.xirr==null?null:o.xirr);
   const bpct = bx.map(o=>o.pct==null?null:o.pct);
   // 信息栏(始终显示最新一天, 不受区间影响)
@@ -218,7 +263,7 @@ function renderAll(){
   document.getElementById('info').innerHTML =
     '<div>期末<b>'+last.d+'</b></div>'+
     '<div>当前市值<b>'+(last.mv/10000).toFixed(1)+'万</b></div>'+
-    '<div>日年化<b>'+(last.xirr==null?'—':last.xirr+'%')+'</b></div>'+
+    '<div>年化<b>'+(last.xirr==null?'—':last.xirr+'%')+'</b></div>'+
     '<div>上证基准<b>'+(lastB.xirr==null?'—':lastB.xirr+'%')+'</b></div>'+
     '<div>上证累计涨跌<b>'+(lastB.pct==null?'—':lastB.pct+'%')+'</b></div>';
   const baseAxis = {type:'category',data:xs,axisLabel:{rotate:45,fontSize:10},boundaryGap:false};
@@ -226,12 +271,12 @@ function renderAll(){
   if(!overallChart) overallChart=echarts.init(document.getElementById('overall'));
   overallChart.setOption({
     tooltip:{trigger:'axis'},
-    legend:{data:['日年化','上证基准年化','上证累计涨跌'],top:0,textStyle:{fontSize:11}},
+    legend:{data:['年化','上证基准年化','上证累计涨跌'],top:0,textStyle:{fontSize:11}},
     grid:{left:60,right:60,top:40,bottom:50},
     xAxis:baseAxis,
     yAxis:[{type:'value',name:'%',axisLabel:{formatter:'{value}%'},position:'left'}],
     series:[
-      {name:'日年化',type:'line',smooth:true,symbol:'none',data:xirr,color:'#c0392b',lineStyle:{width:2,color:'#c0392b'},areaStyle:{color:'#c0392b',opacity:0.12}},
+      {name:'年化',type:'line',smooth:true,symbol:'none',data:xirr,color:'#c0392b',lineStyle:{width:2,color:'#c0392b'},areaStyle:{color:'#c0392b',opacity:0.12}},
       {name:'上证基准年化',type:'line',smooth:true,symbol:'none',data:bxirr,color:'#2980b9',lineStyle:{width:1.5,color:'#2980b9'},yAxisIndex:0},
       {name:'上证累计涨跌',type:'line',smooth:true,symbol:'none',data:bpct,color:'#27ae60',lineStyle:{width:1.5,color:'#27ae60',type:'dashed'},yAxisIndex:0}
     ]
@@ -277,14 +322,15 @@ async function renderFund(code){
   const d = await fetch('/api/fund_xirr?code='+code).then(r=>r.json());
   if(curFundCode!==code) return;  // 已切到别的基金, 丢弃过期响应
   if(!fundChart) fundChart=echarts.init(document.getElementById('fund'));
-  const series = (d.series||[]).filter(p=>fundInRange(p.d));
+  const series = aggregateBy((d.series||[]).filter(p=>fundInRange(p.d)), curFundGran);
   const days = series.map(p=>p.d);
   const xirr = series.map(p=>p.xirr==null?null:p.xirr);
   const all = d.series||[];
   const last = all[all.length-1]||{};
   const currMv = last.mv!=null ? ' · 当前市值 '+(last.mv/10000).toFixed(1)+'万' : '';
   const currPos = last.pos!=null ? ' · 持仓 '+last.pos : '';
-  const title = (d.name||code)+' 个人年化(XIRR)'+currPos+currMv;
+  const currXirr = last.xirr!=null ? ' · 年化 '+last.xirr+'%' : '';
+  const title = (d.name||code)+' 个人年化(XIRR)'+currPos+currMv+currXirr;
   fundChart.setOption({
     title:{text:title,left:'center',textStyle:{fontSize:15}},
     tooltip:{trigger:'axis',formatter:function(ps){const p=ps[0];const idx=p.dataIndex;const pt=series[idx]||{};const v=p.value;return p.name+'<br/>个人年化:'+(v==null?'—':v.toFixed(2)+'%')+'<br/>持仓:'+(pt.pos==null?'—':pt.pos)+'<br/>市值:'+(pt.mv==null?'—':(pt.mv/10000).toFixed(2)+'万');}},
@@ -296,6 +342,8 @@ async function renderFund(code){
 }
 
 // 提交持仓变化
+wireGran('gran-btn', g=>{curGran=g;}, ()=>renderAll());
+wireGran('fgran-btn', g=>{curFundGran=g;}, ()=>{ if(curFundCode) renderFund(curFundCode); });
 document.getElementById('btn_submit').onclick = async ()=>{
   const body = {
     date: document.getElementById('f_date').value,
