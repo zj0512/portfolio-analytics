@@ -73,7 +73,57 @@ class _NavCursor:
         return None
 
 
-def compute_daily(codes=None):
+def _gran_key(d, g):
+    """交易日 → 周期分组键: day/week/month/quarter/year。"""
+    if g == "day":
+        return d
+    if g == "week":
+        dt = datetime.date(int(d[0:4]), int(d[5:7]), int(d[8:10]))
+        dt -= datetime.timedelta(days=dt.weekday())   # 对齐周一
+        return "W" + dt.isoformat()
+    y, m = d[0:4], int(d[5:7])
+    if g == "month":
+        return y + "-" + d[5:7]
+    if g == "quarter":
+        return "%sQ%d" % (y, (m - 1) // 3 + 1)
+    return y
+
+
+def _period_xirr_series(daily, flows, gran):
+    """按周期汇聚为真实周期年化: 每周期单独算资金加权收益并年化。
+    期初市值(上周期末)作期初投入, 周期内现金流计入, 期末市值作终值。
+    返回 [{d:周期末日, mv:期末市值, xirr:该周期年化%}]。"""
+    groups = {}
+    order = []
+    for p in daily:
+        k = _gran_key(p["d"], gran)
+        if k not in groups:
+            groups[k] = []
+            order.append(k)
+        groups[k].append(p)
+    flow_by_date = defaultdict(list)
+    for dd, v in flows:
+        flow_by_date[dd].append(v)
+    out = []
+    prev_mv = 0.0
+    for k in order:
+        pts = groups[k]
+        d1, dk = pts[0]["d"], pts[-1]["d"]
+        mv_end = pts[-1]["mv"]
+        cfs = []
+        if prev_mv > 0:
+            cfs.append((d1, -prev_mv))          # 期初市值作为期初投入
+        for dd, vs in flow_by_date.items():
+            if d1 <= dd <= dk:
+                cfs.extend((dd, v) for v in vs)  # 周期内现金流(负=追加投入)
+        yr = xirr(cfs, dk, mv_end, min_days=1) if (cfs and mv_end > 0) else None
+        out.append({"d": dk, "mv": mv_end,
+                    "xirr": round(yr, 2) if yr is not None else None})
+        prev_mv = mv_end
+    return out
+
+
+def compute_daily(codes=None, gran="day"):
     """整体组合: 每日 {d, mv, xirr, pos}。增量维护持仓, 曲线延伸到净值库最新日。
     codes: 参与计算的基金代码列表, None=全部。"""
     core = [c for c in (codes or CORE) if c in CORE]
@@ -148,12 +198,14 @@ def compute_daily(codes=None):
         out.append({"d": dd, "mv": round(total, 2),
                     "xirr": round(yr, 2) if yr is not None else None,
                     "pos": {c: int(pos[c]) for c in core if pos[c] != 0}})
+    if gran and gran != "day":
+        return _period_xirr_series(out, flows, gran)
     return out
 
 
-def compute_daily_cached(codes=None):
-    """compute_daily 的 30s TTL 缓存封装, 按基金集合分桶。"""
-    key = frozenset(codes) if codes else frozenset(CORE)
+def compute_daily_cached(codes=None, gran="day"):
+    """compute_daily 的 30s TTL 缓存封装, 按基金集合+周期分桶。"""
+    key = (frozenset(codes) if codes else frozenset(CORE), gran)
     now = time.time()
     with _cache["lock"]:
         ent = _cache["map"].get(key)
@@ -165,7 +217,7 @@ def compute_daily_cached(codes=None):
     return val
 
 
-def compute_benchmark():
+def compute_benchmark(gran="day"):
     """上证指数基准: 同现金流虚拟买入指数的 XIRR% + 累计涨跌%。"""
     flows = db.core_flows()
     if not flows:
@@ -204,25 +256,31 @@ def compute_benchmark():
         yr = xirr(cfs, dd, mv, min_days=30, prev_rate=prev_yr) if mv > 0 else None
         if yr is not None:
             prev_yr = yr / 100.0
-        bench.append({"d": dd,
+        bench.append({"d": dd, "mv": round(mv, 2),
                       "xirr": round(yr, 2) if yr is not None else None,
                       "pct": round((close / base_close - 1) * 100, 2)})
+    if gran and gran != "day":
+        pct_by_date = {p["d"]: p.get("pct") for p in bench}
+        agg = _period_xirr_series(bench, flows, gran)
+        for p in agg:
+            p["pct"] = pct_by_date.get(p["d"])
+        bench = agg
     return {"ok": True, "index_name": INDEX_NAME, "bench_xirr": bench}
 
 
-def benchmark_cached():
-    """compute_benchmark 的 TTL 缓存(基准不随基金选择变化)。"""
+def benchmark_cached(gran="day"):
+    """compute_benchmark 的 TTL 缓存(按周期分桶)。"""
     with _cache["lock"]:
-        ent = _cache["map"].get("__bench__")
+        ent = _cache["map"].get(("__bench__", gran))
         if ent is not None and time.time() - ent[1] < _CACHE_TTL:
             return ent[0]
-    val = compute_benchmark()
+    val = compute_benchmark(gran)
     with _cache["lock"]:
-        _cache["map"]["__bench__"] = (val, time.time())
+        _cache["map"][("__bench__", gran)] = (val, time.time())
     return val
 
 
-def compute_fund_daily(code):
+def compute_fund_daily(code, gran="day"):
     """单基金个人年化曲线(XIRR, 基于该基金现金流+期末市值)。"""
     flows, trades = db.fund_flows_trades(code)
     nav_rows = db.nav_all(code)
@@ -263,4 +321,6 @@ def compute_fund_daily(code):
         yr = xirr(flow_cf, dd, mv, min_days=15) if mv > 0 else None
         series.append({"d": dd, "mv": round(mv, 2), "pos": round(pos, 2),
                        "xirr": round(yr, 2) if yr is not None else None})
+    if gran and gran != "day":
+        series = _period_xirr_series(series, flows, gran)
     return {"ok": True, "code": code, "name": FUNDS.get(code, code), "series": series}

@@ -20,11 +20,14 @@ def index():
 
 @app.route("/api/daily")
 def api_daily():
-    """codes: 逗号分隔的基金代码, 缺省=全部。"""
+    """codes: 逗号分隔的基金代码, 缺省=全部; gran: day/week/month/quarter/year。"""
     codes = request.args.get("codes", "")
+    gran = request.args.get("gran", "day")
+    if gran not in ("day", "week", "month", "quarter", "year"):
+        gran = "day"
     sel = [c for c in codes.split(",") if c in FUNDS] if codes else None
     return jsonify({"funds": FUNDS, "default_fund": DEFAULT_FUND,
-                    "daily": calcs.compute_daily_cached(sel)})
+                    "daily": calcs.compute_daily_cached(sel, gran)})
 
 
 @app.route("/api/positions")
@@ -49,7 +52,10 @@ def api_positions():
 
 @app.route("/api/benchmark")
 def api_benchmark():
-    return jsonify(calcs.benchmark_cached())
+    gran = request.args.get("gran", "day")
+    if gran not in ("day", "week", "month", "quarter", "year"):
+        gran = "day"
+    return jsonify(calcs.benchmark_cached(gran))
 
 
 @app.route("/api/nav")
@@ -64,9 +70,12 @@ def api_nav():
 @app.route("/api/fund_xirr")
 def api_fund_xirr():
     code = request.args.get("code", "")
+    gran = request.args.get("gran", "day")
+    if gran not in ("day", "week", "month", "quarter", "year"):
+        gran = "day"
     if code not in FUNDS:
         return jsonify({"ok": False, "error": "bad code"})
-    return jsonify(calcs.compute_fund_daily(code))
+    return jsonify(calcs.compute_fund_daily(code, gran))
 
 
 @app.route("/api/holding", methods=["GET"])
