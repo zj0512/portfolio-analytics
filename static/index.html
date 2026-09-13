@@ -230,7 +230,8 @@ function renderAll(){
   if(!lastDaily.length) return;
   const daily = filterByRange(lastDaily);
   if(!daily.length) return;
-  const xs = daily.map(o=>o.d);
+  const xlab = o => o.label || o.d;
+  const xs = daily.map(xlab);
   const xirr = daily.map(o=>o.xirr==null?null:o.xirr);
   const mv = daily.map(o=>o.mv);
   // 基准数据(上证指数, 同周期真实年化)
@@ -246,7 +247,7 @@ function renderAll(){
     '<div>年化<b>'+(last.xirr==null?'—':last.xirr+'%')+'</b></div>'+
     '<div>上证基准<b>'+(lastB.xirr==null?'—':lastB.xirr+'%')+'</b></div>'+
     '<div>上证累计涨跌<b>'+(lastB.pct==null?'—':lastB.pct+'%')+'</b></div>';
-  const baseAxis = {type:'category',data:xs,axisLabel:{rotate:45,fontSize:10},boundaryGap:false};
+  const baseAxis = {type:'category',data:xs,axisLabel:{rotate:45,fontSize:10,interval:curGran==='day'?'auto':0},boundaryGap:false};
   // 整体年化
   if(!overallChart) overallChart=echarts.init(document.getElementById('overall'));
   overallChart.setOption({
@@ -305,7 +306,7 @@ async function renderFund(code){
   if(curFundCode!==code) return;  // 已切到别的基金, 丢弃过期响应
   if(!fundChart) fundChart=echarts.init(document.getElementById('fund'));
   const series = (r.series||[]).filter(p=>fundInRange(p.d));
-  const days = series.map(p=>p.d);
+  const days = series.map(p=>p.label||p.d);
   const xirr = series.map(p=>p.xirr==null?null:p.xirr);
   const all = r.series||[];
   const last = all[all.length-1]||{};

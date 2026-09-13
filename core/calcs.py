@@ -117,7 +117,9 @@ def _period_xirr_series(daily, flows, gran):
             if d1 <= dd <= dk:
                 cfs.extend((dd, v) for v in vs)  # 周期内现金流(负=追加投入)
         yr = xirr(cfs, dk, mv_end, min_days=1) if (cfs and mv_end > 0) else None
-        out.append({"d": dk, "mv": mv_end,
+        # 周期标签: 周=周一日期, 月=YYYY-MM, 季=YYYY-Qn, 年=YYYY
+        label = k[1:] if k.startswith("W") else (k if gran != "week" else k)
+        out.append({"d": dk, "label": label, "mv": mv_end,
                     "xirr": round(yr, 2) if yr is not None else None})
         prev_mv = mv_end
     return out
@@ -211,7 +213,7 @@ def compute_daily_cached(codes=None, gran="day"):
         ent = _cache["map"].get(key)
         if ent is not None and now - ent[1] < _CACHE_TTL:
             return ent[0]
-    val = compute_daily(codes)
+    val = compute_daily(codes, gran)
     with _cache["lock"]:
         _cache["map"][key] = (val, time.time())
     return val
