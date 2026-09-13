@@ -224,27 +224,41 @@ def fetch_price_history(code, start_date, days=120):
 
 def sync_prices(backfill_days=100):
     """同步全部基金交易价格入 fund_price 表(与净值同频定时调用)。
-    每次回补近 backfill_days 天历史(滚动保持>=3个月), 再叠加腾讯实时最新价。
-    返回写入条数。"""
+    日常增量: 只抓腾讯实时最新价入当曰; 若某只库内最新价落后超过2天
+    (停机/新增标的等缺口), 仅对该只回补近 backfill_days 天K线。"""
     import datetime as _dt
-    beg = (_dt.date.today() - _dt.timedelta(days=backfill_days)).strftime("%Y-%m-%d")
     conn = sqlite3.connect(DB)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS fund_price (fund_code TEXT, fsrq TEXT,"
         " price REAL, PRIMARY KEY(fund_code, fsrq))")
+    latest = {r[0]: r[1] for r in
+              conn.execute("SELECT fund_code, MAX(fsrq) FROM fund_price GROUP BY fund_code")}
+    conn.close()
+    today = _dt.date.today()
     rows = []
-    for code in FUNDS:
-        rows.extend((code, d, p) for d, p in fetch_price_history(code, beg))
-        time.sleep(0.2)
+    # 实时最新价(全量, 一次批量请求)
     try:
-        rows.extend((c, d, p) for c, (d, p) in fetch_prices(list(FUNDS.keys())).items())
+        rows = [(c, d, p) for c, (d, p) in fetch_prices(list(FUNDS.keys())).items()]
     except Exception as e:
         log.warning("腾讯实时行情失败: %s", e)
+    # 仅对有缺口的基金回补K线历史(增量例外, 不是每日全量)
+    for code in FUNDS:
+        last = latest.get(code)
+        if not last:
+            need = True  # 新标的, 库内无价
+        else:
+            gap = (today - _dt.date(int(last[0:4]), int(last[5:7]), int(last[8:10]))).days
+            need = gap > 2   # 正常得日更新不会触发; 停机/漏抓才补
+        if need:
+            beg = (today - _dt.timedelta(days=backfill_days)).strftime("%Y-%m-%d")
+            rows.extend((code, d, p) for d, p in fetch_price_history(code, beg))
+            time.sleep(0.2)
     if rows:
+        conn = sqlite3.connect(DB)
         conn.executemany(
             "INSERT OR REPLACE INTO fund_price (fund_code, fsrq, price) VALUES (?,?,?)", rows)
         conn.commit()
-    conn.close()
+        conn.close()
     return len(rows)
 
 
