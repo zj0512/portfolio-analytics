@@ -18,6 +18,8 @@ log = logging.getLogger("portfolio.sync")
 EM_F10 = "http://api.fund.eastmoney.com/f10/lsjz?fundCode=%s&pageIndex=%s&pageSize=%s&startDate=%s&endDate=%s"
 EM_KLINE = ("http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.000001"
             "&fields1=f1,f2,f3&fields2=f51,f53&klt=101&fqt=0&beg=%s&end=20500101")
+EM_KLINE_SEC = ("http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=%s"
+                "&fields1=f1,f2,f3&fields2=f51,f53&klt=101&fqt=0&beg=%s&end=20500101")
 TX_QUOTE = "http://qt.gtimg.cn/q=sh000001"
 TX_ETF_QUOTE = "http://qt.gtimg.cn/q=%s"
 
@@ -177,23 +179,73 @@ def fetch_prices(codes):
     return out
 
 
-def sync_prices():
-    """抓全部基金最新成交价写入 fund_price 表(与净值同频定时调用, 逐日累积)。
+TX_KLINE = ("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?"
+             "param=%s,day,,,%d,")  # 不复权, 返回真实成交价
+
+
+def fetch_price_history(code, start_date, days=120):
+    """拉某基金日线收盘(交易价格)历史。start_date 为 YYYY-MM-DD。
+    主源: 东财K线; 降级: 腾讯K线。返回 [(fsrq, price), ...]。"""
+    # 主源: 东财
+    secid = ("1." if code.startswith("5") else "0.") + code
+    beg = start_date.replace("-", "")
+    try:
+        d = _get_json(EM_KLINE_SEC % (secid, beg), "http://quote.eastmoney.com/")
+        out = []
+        for line in (d.get("data") or {}).get("klines", []):
+            parts = line.split(",")
+            try:
+                out.append((parts[0], float(parts[1])))
+            except (IndexError, ValueError):
+                continue
+        if out:
+            return out
+    except Exception as e:
+        log.warning("东财K线(%s)失败: %s", code, e)
+    # 降级: 腾讯K线(不复权)
+    try:
+        sym = _mkt_prefix(code) + code
+        req = urllib.request.Request(TX_KLINE % (sym, days), headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        k = (d.get("data") or {}).get(sym) or {}
+        arr = k.get("day") or []
+        out = []
+        for row in arr:
+            try:
+                out.append((row[0], float(row[2])))
+            except (IndexError, ValueError):
+                continue
+        return [p for p in out if p[0] >= start_date]
+    except Exception as e:
+        log.warning("腾讯K线(%s)失败: %s", code, e)
+        return []
+
+
+def sync_prices(backfill_days=100):
+    """同步全部基金交易价格入 fund_price 表(与净值同频定时调用)。
+    每次回补近 backfill_days 天历史(滚动保持>=3个月), 再叠加腾讯实时最新价。
     返回写入条数。"""
-    data = fetch_prices(list(FUNDS.keys()))
-    n = 0
-    if data:
-        conn = sqlite3.connect(DB)
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS fund_price (fund_code TEXT, fsrq TEXT,"
-            " price REAL, PRIMARY KEY(fund_code, fsrq))")
+    import datetime as _dt
+    beg = (_dt.date.today() - _dt.timedelta(days=backfill_days)).strftime("%Y-%m-%d")
+    conn = sqlite3.connect(DB)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS fund_price (fund_code TEXT, fsrq TEXT,"
+        " price REAL, PRIMARY KEY(fund_code, fsrq))")
+    rows = []
+    for code in FUNDS:
+        rows.extend((code, d, p) for d, p in fetch_price_history(code, beg))
+        time.sleep(0.2)
+    try:
+        rows.extend((c, d, p) for c, (d, p) in fetch_prices(list(FUNDS.keys())).items())
+    except Exception as e:
+        log.warning("腾讯实时行情失败: %s", e)
+    if rows:
         conn.executemany(
-            "INSERT OR REPLACE INTO fund_price (fund_code, fsrq, price) VALUES (?,?,?)",
-            [(c, d, p) for c, (d, p) in data.items()])
+            "INSERT OR REPLACE INTO fund_price (fund_code, fsrq, price) VALUES (?,?,?)", rows)
         conn.commit()
-        conn.close()
-        n = len(data)
-    return n
+    conn.close()
+    return len(rows)
 
 
 def sync_on_startup():
