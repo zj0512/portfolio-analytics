@@ -65,6 +65,28 @@
 </div>
 
 <div class="card">
+  <div class="range">
+    <span>时间段:</span>
+    <div class="range-btn pr" data-days="30">近1月</div>
+    <div class="range-btn pr active" data-days="91">近3月</div>
+    <div class="range-btn pr" data-days="182">近6月</div>
+    <div class="range-btn pr" data-days="365">近1年</div>
+    <div class="range-btn pr" data-days="0">全部</div>
+    <span style="margin-left:8px">自定义:</span>
+    <input type="date" id="prr_from"> ~ <input type="date" id="prr_to">
+  </div>
+  <div style="margin-bottom:8px"><b>周期收益率</b> <span style="color:#888;font-size:12px">该周期实际涨跌%, 不折年化</span>
+    <span style="margin-left:12px;font-size:12px;color:#888">周期:</span>
+    <span class="pgran-btn range-btn active" data-gran="day">日</span>
+    <span class="pgran-btn range-btn" data-gran="week">周</span>
+    <span class="pgran-btn range-btn" data-gran="month">月</span>
+    <span class="pgran-btn range-btn" data-gran="quarter">季</span>
+    <span class="pgran-btn range-btn" data-gran="year">年</span>
+  </div>
+  <div class="chart" id="pret" style="height:360px"></div>
+</div>
+
+<div class="card">
   <div style="margin-bottom:8px"><b>持仓市值走势</b></div>
   <div class="chart" id="mv"></div>
 </div>
@@ -109,9 +131,12 @@
 <script>
 let FUNDS = {};
 let DEFAULT_FUND = '';
-let overallChart, mvChart, fundChart;
+let overallChart, mvChart, fundChart, pretChart;
 let curRange = {days:91, from:null, to:null};   // 默认近3个月
 let curFundRange = {days:91, from:null, to:null};       // 单基金区间, 默认近3个月
+let curPretRange = {days:91, from:null, to:null};       // 周期收益率区间, 默认近3个月
+let curPretGran = 'day';
+let lastPret = {series:[], bench:[]};
 let lastDaily = [], lastBench = [];
 
 // ---------- 时间区间 ----------
@@ -293,6 +318,7 @@ async function fetchAndRender(){
   loadFunds(data);
   buildCoreSel();
   await fetchDaily();
+  fetchPret();               // 周期收益率(与单基金并行)
   renderFund(DEFAULT_FUND);   // 单只基金默认创业50
   initSim();                  // 基金列表就绪后再初始化比例调整预测表单
 }
@@ -327,6 +353,57 @@ async function renderFund(code){
 // 提交持仓变化
 wireGran('gran-btn', g=>{curGran=g;}, ()=>fetchDaily());
 wireGran('fgran-btn', g=>{curFundGran=g;}, ()=>{ if(curFundCode) renderFund(curFundCode); });
+
+// ---------- 周期收益率模块 ----------
+function pretRangeStart(){
+  if(curPretRange.days>0){ const d=new Date(); d.setDate(d.getDate()-curPretRange.days); return d.toISOString().slice(0,10); }
+  return curPretRange.from || '1900-01-01';
+}
+function pretRangeEnd(){ return curPretRange.to || '2999-12-31'; }
+function pretInRange(d){ return d>=pretRangeStart() && d<=pretRangeEnd(); }
+document.querySelectorAll('.range-btn.pr').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.range-btn.pr').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  curPretRange.days = parseInt(b.dataset.days||'0');
+  if(curPretRange.days>0){ curPretRange.from=curPretRange.to=null; }
+  renderPret();
+});
+document.getElementById('prr_from').onchange = ()=>{curPretRange.days=0;curPretRange.from=document.getElementById('prr_from').value||null;
+  document.querySelectorAll('.range-btn.pr').forEach(x=>x.classList.remove('active'));renderPret();};
+document.getElementById('prr_to').onchange = ()=>{curPretRange.days=0;curPretRange.to=document.getElementById('prr_to').value||null;
+  document.querySelectorAll('.range-btn.pr').forEach(x=>x.classList.remove('active'));renderPret();};
+wireGran('pgran-btn', g=>{curPretGran=g;}, ()=>fetchPret());
+async function fetchPret(){
+  if(!Object.keys(FUNDS).length) return;
+  const codes = coreSelCodes();
+  let url = '/api/period_return'+(codes.length?('?codes='+codes.join(',')):'');
+  if(curPretGran!=='day') url += (codes.length?'&':'?')+'gran='+curPretGran;
+  try{
+    const r = await fetch(url).then(x=>x.json());
+    lastPret = {series: r.series||[], bench: r.bench||[]};
+  }catch(e){ lastPret = {series:[], bench:[]}; }
+  renderPret();
+}
+function renderPret(){
+  const s = (lastPret.series||[]).filter(p=>pretInRange(p.d));
+  const b = (lastPret.bench||[]).filter(p=>pretInRange(p.d));
+  if(!s.length && !b.length) return;
+  if(!pretChart) pretChart=echarts.init(document.getElementById('pret'));
+  const xs = s.length?s.map(p=>p.label||p.d):b.map(p=>p.label||p.d);
+  pretChart.setOption({
+    tooltip:{trigger:'axis',valueFormatter:v=>v==null?'—':v+'%'},
+    legend:{data:['组合','上证指数'],top:0,textStyle:{fontSize:11}},
+    grid:{left:60,right:30,top:40,bottom:50},
+    xAxis:{type:'category',data:xs,axisLabel:{rotate:45,fontSize:10},boundaryGap:false},
+    yAxis:{type:'value',name:'%',axisLabel:{formatter:'{value}%'}},
+    series:[
+      {name:'组合',type:curPretGran==='day'?'line':'bar',smooth:true,symbol:'none',data:s.map(p=>p.ret==null?null:p.ret),itemStyle:{color:'#c0392b'},lineStyle:{width:2,color:'#c0392b'},areaStyle:curPretGran==='day'?{color:'#c0392b',opacity:0.1}:undefined},
+      {name:'上证指数',type:curPretGran==='day'?'line':'bar',smooth:true,symbol:'none',data:b.map(p=>p.ret==null?null:p.ret),itemStyle:{color:'#2980b9'},lineStyle:{width:1.5,color:'#2980b9'}}
+    ]
+  },true);
+  window.addEventListener('resize',()=>pretChart&&pretChart.resize());
+}
+
 document.getElementById('btn_submit').onclick = async ()=>{
   const body = {
     date: document.getElementById('f_date').value,

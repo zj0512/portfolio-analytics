@@ -58,6 +58,19 @@ def api_benchmark():
     return jsonify(calcs.benchmark_cached(gran))
 
 
+@app.route("/api/period_return")
+def api_period_return():
+    """周期收益率: codes 同 daily; gran: day/week/month/quarter/year。"""
+    codes = request.args.get("codes", "")
+    gran = request.args.get("gran", "day")
+    if gran not in ("day", "week", "month", "quarter", "year"):
+        gran = "day"
+    sel = [c for c in codes.split(",") if c in FUNDS] if codes else None
+    out = calcs.compute_period_return(sel, gran)
+    out["ok"] = True
+    return jsonify(out)
+
+
 @app.route("/api/nav")
 def api_nav():
     code = request.args.get("code", "")

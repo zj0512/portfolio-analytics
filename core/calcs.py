@@ -89,40 +89,80 @@ def _gran_key(d, g):
     return y
 
 
-def _period_xirr_series(daily, flows, gran):
-    """按周期汇聚为真实周期年化: 每周期单独算资金加权收益并年化。
-    期初市值(上周期末)作期初投入, 周期内现金流计入, 期末市值作终值。
-    返回 [{d:周期末日, mv:期末市值, xirr:该周期年化%}]。"""
-    groups = {}
-    order = []
+def _gran_rollup(daily, gran):
+    """滚动累计: 取每周期最后一个点(累计XIRR语义与日线一致), 附周期标签。"""
+    groups, order = {}, []
     for p in daily:
         k = _gran_key(p["d"], gran)
         if k not in groups:
             groups[k] = []
             order.append(k)
         groups[k].append(p)
-    flow_by_date = defaultdict(list)
+    out = []
+    for k in order:
+        p = dict(groups[k][-1])
+        p["label"] = k[1:] if k.startswith("W") else k
+        out.append(p)
+    return out
+
+
+def _period_return_series(daily, flows, gran):
+    """周期收益率: 该周期实际涨跌%(不折年, 市值法)。
+    收益 = 期末市值 - 期初市值 + 周期内现金流之和(负=投入);
+    收益率 = 收益 / 期初市值。日粒度=单日收益率。首点无期初基准返回 None。"""
+    flow_by_date = defaultdict(float)
     for dd, v in flows:
-        flow_by_date[dd].append(v)
+        flow_by_date[dd] += v   # 负=买入投入, 正=卖出回流
+    if gran == "day":
+        out = []
+        prev_mv = None
+        for p in daily:
+            ret = None
+            if prev_mv and prev_mv > 0:
+                gain = p["mv"] - prev_mv + flow_by_date.get(p["d"], 0.0)
+                ret = round(gain / prev_mv * 100, 2)
+            out.append({"d": p["d"], "label": p["d"], "ret": ret})
+            prev_mv = p["mv"]
+        return out
+    groups, order = {}, []
+    for p in daily:
+        k = _gran_key(p["d"], gran)
+        if k not in groups:
+            groups[k] = []
+            order.append(k)
+        groups[k].append(p)
     out = []
     prev_mv = 0.0
     for k in order:
         pts = groups[k]
         d1, dk = pts[0]["d"], pts[-1]["d"]
         mv_end = pts[-1]["mv"]
-        cfs = []
+        sflow = sum(v for dd, v in flow_by_date.items() if d1 <= dd <= dk)
+        ret = None
         if prev_mv > 0:
-            cfs.append((d1, -prev_mv))          # 期初市值作为期初投入
-        for dd, vs in flow_by_date.items():
-            if d1 <= dd <= dk:
-                cfs.extend((dd, v) for v in vs)  # 周期内现金流(负=追加投入)
-        yr = xirr(cfs, dk, mv_end, min_days=1) if (cfs and mv_end > 0) else None
-        # 周期标签: 周=周一日期, 月=YYYY-MM, 季=YYYY-Qn, 年=YYYY
-        label = k[1:] if k.startswith("W") else (k if gran != "week" else k)
-        out.append({"d": dk, "label": label, "mv": mv_end,
-                    "xirr": round(yr, 2) if yr is not None else None})
+            ret = round((mv_end - prev_mv + sflow) / prev_mv * 100, 2)
+        out.append({"d": dk, "label": k[1:] if k.startswith("W") else k, "ret": ret})
         prev_mv = mv_end
     return out
+
+
+def compute_period_return(codes=None, gran="day"):
+    """整体组合+上证基准的周期收益率。"""
+    daily = compute_daily(codes)            # 日粒度累计序列
+    core = [c for c in (codes or CORE) if c in CORE] or list(CORE)
+    flows = []
+    for c in core:
+        f, _ = db.fund_flows_trades(c)
+        flows.extend(f)
+    flows.sort()
+    series = _period_return_series(daily, flows, gran)
+    bench = []
+    idx = db.index_all()
+    if idx:
+        bd = _period_return_series(
+            [{"d": d, "mv": c} for d, c in idx], [], gran)
+        bench = bd
+    return {"series": series, "bench": bench}
 
 
 def compute_daily(codes=None, gran="day"):
@@ -201,7 +241,7 @@ def compute_daily(codes=None, gran="day"):
                     "xirr": round(yr, 2) if yr is not None else None,
                     "pos": {c: int(pos[c]) for c in core if pos[c] != 0}})
     if gran and gran != "day":
-        return _period_xirr_series(out, flows, gran)
+        return _gran_rollup(out, gran)   # 滚动累计: 取周期末点, 语义与日线一致
     return out
 
 
@@ -263,7 +303,7 @@ def compute_benchmark(gran="day"):
                       "pct": round((close / base_close - 1) * 100, 2)})
     if gran and gran != "day":
         pct_by_date = {p["d"]: p.get("pct") for p in bench}
-        agg = _period_xirr_series(bench, flows, gran)
+        agg = _gran_rollup(bench, gran)
         for p in agg:
             p["pct"] = pct_by_date.get(p["d"])
         bench = agg
@@ -324,5 +364,5 @@ def compute_fund_daily(code, gran="day"):
         series.append({"d": dd, "mv": round(mv, 2), "pos": round(pos, 2),
                        "xirr": round(yr, 2) if yr is not None else None})
     if gran and gran != "day":
-        series = _period_xirr_series(series, flows, gran)
+        series = _gran_rollup(series, gran)
     return {"ok": True, "code": code, "name": FUNDS.get(code, code), "series": series}
