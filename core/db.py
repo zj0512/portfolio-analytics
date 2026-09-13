@@ -51,9 +51,14 @@ def upsert_index(index_code, fsrq, close):
 
 
 def all_trade_dates():
-    """净值库中所有出现过的交易日期(升序, 去重)。"""
+    """净值+成交价库中所有出现过的交易日期(升序, 去重)。"""
     conn = _conn(DB)
-    rows = [r[0] for r in conn.execute("SELECT DISTINCT fsrq FROM fund_nav ORDER BY fsrq")]
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS fund_price (fund_code TEXT, fsrq TEXT,"
+        " price REAL, PRIMARY KEY(fund_code, fsrq))")
+    rows = [r[0] for r in conn.execute(
+        "SELECT DISTINCT fsrq FROM (SELECT DISTINCT fsrq FROM fund_nav"
+        " UNION SELECT DISTINCT fsrq FROM fund_price) ORDER BY fsrq")]
     conn.close()
     return rows
 

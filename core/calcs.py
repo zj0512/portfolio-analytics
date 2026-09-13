@@ -230,7 +230,8 @@ def compute_fund_daily(code):
     if not flows:
         return {"ok": False, "error": "无交易记录"}
     first_trade = min(f[0] for f in flows)
-    dates = [d for d, _ in nav_rows if d >= first_trade]
+    # 日期序列取净值与成交价库的并集(QDII净值滞后时仍能用最新成交价出点)
+    dates = [d for d in db.all_trade_dates() if d >= first_trade]
 
     trade_by_date = defaultdict(list)
     for d, p, q, o in trades:
@@ -252,13 +253,13 @@ def compute_fund_daily(code):
                 if p > 0 and q > 0:
                     pos -= q
         flow_cf.extend((dd, v) for v in flow_by_date.get(dd, []))
-        nv = cursor.at(dd)
+        nv = pcursor.at(dd) if (price_rows and price_rows[0][0] <= dd) else None
+        if nv is None:
+            nv = cursor.at(dd)
         if nv is None:
             continue
         # 估值优先用交易价格, 无价格记录的日期回退净值
-        pv = pcursor.at(dd)
-        val = pv if pv is not None else nv
-        mv = pos * val
+        mv = pos * nv
         yr = xirr(flow_cf, dd, mv, min_days=15) if mv > 0 else None
         series.append({"d": dd, "mv": round(mv, 2), "pos": round(pos, 2),
                        "xirr": round(yr, 2) if yr is not None else None})
