@@ -262,6 +262,52 @@ def sync_prices(backfill_days=100):
     return len(rows)
 
 
+def backfill_recent_gap(days=14):
+    """启动时补齐最近 N 天的价格缺口(含中间缺失日)。
+    参考交易日 = 近 N 天 fund_nav/index_nav 中出现过的日期(剔除周末与非交易日);
+    某基金缺失其中任一天 → 仅对该基金回补该窗口K线并补写缺失日。
+    返回 {code: 补到的天数}。"""
+    import datetime as _dt
+    today = _dt.date.today()
+    beg = (today - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
+    conn = sqlite3.connect(DB)
+    ref_dates = [r[0] for r in conn.execute(
+        "SELECT DISTINCT fsrq FROM fund_nav WHERE fsrq>=? "
+        "UNION SELECT DISTINCT fsrq FROM index_nav WHERE fsrq>=? "
+        "UNION SELECT DISTINCT fsrq FROM fund_price WHERE fsrq>=? "
+        "ORDER BY 1", (beg, beg, beg))]
+    ref = set(ref_dates)
+    # 当天实时价尚未发布/非交易日不视为缺口: 只要求覆盖到库内全局最新日的前一天
+    if ref_dates:
+        cutoff = max(ref_dates)
+        ref = {d for d in ref if d < cutoff}
+    fixed = {}
+    for code in FUNDS:
+        have = {r[0] for r in conn.execute(
+            "SELECT DISTINCT fsrq FROM fund_price WHERE fund_code=? AND fsrq>=?",
+            (code, beg))}
+        missing = sorted(ref - have)
+        if not missing:
+            continue
+        hist = dict(fetch_price_history(code, beg, days=days + 10))
+        got = 0
+        for d in missing:
+            if d in hist:
+                conn.execute(
+                    "INSERT OR REPLACE INTO fund_price (fund_code, fsrq, price) VALUES (?,?,?)",
+                    (code, d, hist[d]))
+                got += 1
+        if got:
+            fixed[code] = got
+            log.info("补齐 %s 价格缺口 %d 天: %s", code, got, missing)
+        time.sleep(0.2)
+    conn.commit()
+    conn.close()
+    if fixed:
+        log.info("启动缺口补齐完成: %s", fixed)
+    return fixed
+
+
 def sync_on_startup():
     """启动时主动同步: 补齐从库里最后日期到今天的数据(解决停机缺口)。"""
     total = {}
@@ -280,6 +326,11 @@ def sync_on_startup():
         except Exception as e:
             log.error("成交价同步失败: %s", e)
             total["prices"] = -1
+        try:
+            total["gap_fix"] = backfill_recent_gap(14)
+        except Exception as e:
+            log.error("近两周价格缺口补齐失败: %s", e)
+            total["gap_fix"] = -1
         log.info("启动同步完成: %s", total)
     except Exception as e:
         log.error("启动同步异常: %s", e)
