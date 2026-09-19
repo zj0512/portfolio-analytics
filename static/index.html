@@ -351,10 +351,18 @@ async function renderFund(code){
   const r = await fetch('/api/fund_xirr?code='+code+(curFundGran!=='day'?('&gran='+curFundGran):'')).then(r=>r.json());
   if(curFundCode!==code) return;  // 已切到别的基金, 丢弃过期响应
   const series = (r.series||[]).filter(p=>fundInRange(p.d));
+  const hasXirr = series.some(p=>p.xirr!=null);
   if(!r.series || !r.series.length){
     if(!fundChart) fundChart=echarts.init(document.getElementById('fund'));
     fundChart.clear();
     fundChart.setOption({title:{text:(r.name||code)+' 暂无数据(未同步到净值/价格, 请确认代码有效)',left:'center',top:'middle',textStyle:{fontSize:14,color:'#888'}}});
+    return;
+  }
+  if(!hasXirr){
+    if(!fundChart) fundChart=echarts.init(document.getElementById('fund'));
+    fundChart.clear();
+    const all0 = r.series[r.series.length-1]||{};
+    fundChart.setOption({title:{text:(r.name||code)+' 持仓 '+fmtNum(all0.pos,0)+' 份 · 市值 '+fmtNum(all0.mv,0)+' 元<br/><span style="font-size:12px">(持有不足15天, 年化收益暂无法计算, 数据足够后自动出线)</span>',left:'center',top:'middle',textStyle:{fontSize:14,color:'#888'}}});
     return;
   }
   if(!fundChart) fundChart=echarts.init(document.getElementById('fund'));
