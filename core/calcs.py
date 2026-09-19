@@ -248,6 +248,12 @@ def compute_daily(codes=None, gran="day"):
     return out
 
 
+def cache_clear_all():
+    """清空全部 TTL 缓存(录入持仓/新增标的后调用)。"""
+    with _cache["lock"]:
+        _cache["map"].clear()
+
+
 def compute_daily_cached(codes=None, gran="day"):
     """compute_daily 的 30s TTL 缓存封装, 按基金集合+周期分桶。"""
     key = (frozenset(codes) if codes else frozenset(CORE), gran)

@@ -4,6 +4,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_compress import Compress
 
 from core import calcs, db, fetchers, sim_alloc
+from core import config
 from core.config import STATIC, FUNDS, DEFAULT_FUND, PORT
 from core.dates import today
 
@@ -100,14 +101,26 @@ def api_holding_list():
 def api_holding_add():
     body = request.get_json(force=True)
     date = body.get("date", "")
-    code = body.get("code", "")
+    code = (body.get("code", "") or "").strip()
+    name = (body.get("name") or "").strip()   # 新标的可选名称
     action = body.get("action", "")
     qty = body.get("qty")
     price = body.get("price")
-    if not date or code not in FUNDS or not qty:
+    if not date or not qty:
         return jsonify({"ok": False, "error": "缺失字段或代码非法"})
+    if code not in FUNDS:
+        # 新标的: 自动注册, 全模块立即可见
+        ok, err = config.add_fund(code, name)
+        if not ok:
+            return jsonify({"ok": False, "error": err or "代码非法"})
+        try:
+            fetchers.sync_on_startup()
+        except Exception:
+            pass
     new_id = db.holding_add(date, code, action, qty, price)
-    return jsonify({"ok": True, "id": new_id, "received": body})
+    calcs.cache_clear_all()
+    return jsonify({"ok": True, "id": new_id, "received": body,
+                    "name": FUNDS.get(code, code)})
 
 
 @app.route("/api/sim_alloc", methods=["GET"])

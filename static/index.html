@@ -120,13 +120,25 @@
   <div class="form">
     <div><label>日期</label><input id="f_date" type="date"></div>
     <div><label>标的</label><select id="f_code"></select></div>
+    <div id="f_newwrap" style="display:none"><label>新代码</label><input id="f_newcode" type="text" maxlength="6" placeholder="6位代码" style="width:90px"></div>
+    <div id="f_newwrap2" style="display:none"><label>新名称</label><input id="f_newname" type="text" placeholder="名称(可选)"></div>
     <div><label>操作</label><select id="f_action"><option value="BUY">买入</option><option value="SELL">卖出</option></select></div>
     <div><label>数量</label><input id="f_qty" type="number" min="1" placeholder="股数/份数"></div>
     <div><label>价格(可选)</label><input id="f_price" type="number" step="0.0001" placeholder="成交价"></div>
     <div style="display:flex;align-items:flex-end"><button id="btn_submit">提交</button></div>
   </div>
   <button class="btn-refresh" id="btn_refresh">刷新曲线</button>
+  <button class="btn-refresh" id="btn_history" style="margin-left:8px">历史记录</button>
   <div id="msg" style="font-size:12px;color:#27ae60;margin-top:6px"></div>
+  <div id="hold_history" style="display:none;margin-top:10px">
+    <div style="font-weight:bold;margin-bottom:6px">持仓变化历史 <span style="color:#888;font-weight:normal;font-size:12px">(最近50条)</span></div>
+    <div style="max-height:260px;overflow:auto">
+    <table id="hist_table" style="border-collapse:collapse;font-size:13px;width:100%">
+      <thead><tr><th style="padding:4px 10px;border:1px solid #ddd;text-align:left">日期</th><th style="padding:4px 10px;border:1px solid #ddd;text-align:left">标的</th><th style="padding:4px 10px;border:1px solid #ddd">操作</th><th style="padding:4px 10px;border:1px solid #ddd">数量</th><th style="padding:4px 10px;border:1px solid #ddd">价格</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -233,7 +245,14 @@ function loadFunds(data){
     const o=document.createElement('option'); o.value=code; o.textContent=FUNDS[code]+' ('+code+')';
     sel.appendChild(o);
   });
+  const oNew=document.createElement('option'); oNew.value='__NEW__'; oNew.textContent='＋ 新标的...';
+  sel.appendChild(oNew);
   sel.value = DEFAULT_FUND;   // 录入页标的也默认创业50
+  sel.onchange = ()=>{
+    const isNew = sel.value==='__NEW__';
+    document.getElementById('f_newwrap').style.display = isNew?'':'none';
+    document.getElementById('f_newwrap2').style.display = isNew?'':'none';
+  };
   buildFundButtons();
 }
 
@@ -413,20 +432,84 @@ function renderPret(){
   window.addEventListener('resize',()=>pretChart&&pretChart.resize());
 }
 
+let POS_BY_CODE = {};   // 最新持仓/价格缓存, 提交确认用
+async function refreshPosCache(){
+  try{ const d = await fetch('/api/positions').then(r=>r.json());
+    if(d.ok){ POS_BY_CODE={}; (d.positions||[]).forEach(p=>POS_BY_CODE[p.code]=p); } }catch(e){}
+}
+
 document.getElementById('btn_submit').onclick = async ()=>{
-  const body = {
-    date: document.getElementById('f_date').value,
-    code: document.getElementById('f_code').value,
-    action: document.getElementById('f_action').value,
-    qty: parseFloat(document.getElementById('f_qty').value),
-    price: document.getElementById('f_price').value?parseFloat(document.getElementById('f_price').value):null,
-  };
+  const selEl = document.getElementById('f_code');
+  let code = selEl.value, name = null;
+  if(code==='__NEW__'){
+    code = document.getElementById('f_newcode').value.trim();
+    name = document.getElementById('f_newname').value.trim()||null;
+    if(!/^\d{6}$/.test(code)){ document.getElementById('msg').style.color='#c0392b'; document.getElementById('msg').textContent='新标的代码必须是6位数字'; return; }
+  }
+  const action = document.getElementById('f_action').value;
+  const qty = parseFloat(document.getElementById('f_qty').value);
+  const date = document.getElementById('f_date').value;
+  const price = document.getElementById('f_price').value?parseFloat(document.getElementById('f_price').value):null;
+  if(!date || !qty || qty<=0){ document.getElementById('msg').style.color='#c0392b'; document.getElementById('msg').textContent='日期/数量必填且数量>0'; return; }
+  await refreshPosCache();
+  const pos = POS_BY_CODE[code];
+  const curPos = pos?(pos.pos||0):0;
+  const curPrice = price!=null?price:(pos?(pos.price||0):0);
+  const curMv = curPos*curPrice;
+  const newPos = action==='BUY'?curPos+qty:curPos-qty;
+  if(newPos<0){ document.getElementById('msg').style.color='#c0392b'; document.getElementById('msg').textContent='卖出数量超过当前持仓('+curPos+')'; return; }
+  const newMv = newPos*curPrice;
+  const fname = name||FUNDS[code]||code;
+  const act = action==='BUY'?'买入':'卖出';
+  const ok = window.confirm(
+    '请确认录入信息:\n\n'+
+    '标的: '+fname+' ('+code+')'+(name&&!FUNDS[code]?'  [新标的, 将自动加入所有模块]':'')+'\n'+
+    '日期: '+date+'\n\n'+
+    '当前持仓: '+fmtNum(curPos,0)+',  当前市值: '+fmtNum(curMv,0)+' 元\n'+
+    '现'+act+'份额: '+fmtNum(qty,0)+',  单价: '+(price!=null?price:(curPrice||'—'))+'\n\n'+
+    '新持仓: '+fmtNum(newPos,0)+',  新市值: '+fmtNum(newMv,0)+' 元\n\n'+
+    '确认提交吗?');
+  if(!ok){ document.getElementById('msg').style.color='#888'; document.getElementById('msg').textContent='已取消'; return; }
+  const body = { date, code, name, action, qty, price };
   const r = await fetch('/api/holding',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const d = await r.json();
+  document.getElementById('msg').style.color='#27ae60';
   document.getElementById('msg').textContent = '已提交: '+JSON.stringify(d.received||d);
+  if(d.ok){
+    // 新标的: 后端已注册, 刷新基金列表让所有模块立即包含它
+    const dd = await fetch('/api/daily').then(x=>x.json());
+    loadFunds(dd);
+  }
   await fetchAndRender();
 };
+
 document.getElementById('btn_refresh').onclick = fetchAndRender;
+
+// ---------- 持仓变化历史记录 ----------
+document.getElementById('btn_history').onclick = async ()=>{
+  const box = document.getElementById('hold_history');
+  if(box.style.display==='none'){
+    box.style.display='';
+    try{
+      const d = await fetch('/api/holding').then(r=>r.json());
+      const rows = (d.holdings||[]).slice(-50).reverse();
+      const tb = document.querySelector('#hist_table tbody');
+      tb.innerHTML='';
+      rows.forEach(h=>{
+        const tr=document.createElement('tr');
+        const td=(v,align)=>{const t=document.createElement('td');t.style.cssText='padding:4px 10px;border:1px solid #ddd'+(align?';text-align:right':'');t.textContent=v;tr.appendChild(t);};
+        td(h.date); td((FUNDS[h.code]||h.name||h.code)+' ('+h.code+')');
+        const tA=document.createElement('td'); tA.style.cssText='padding:4px 10px;border:1px solid #ddd;text-align:center';
+        tA.textContent=h.action==='BUY'?'买入':'卖出'; tA.style.color=h.action==='BUY'?'#c0392b':'#27ae60'; tr.appendChild(tA);
+        td(fmtNum(h.qty,0),true); td(h.price!=null?h.price:'—',true);
+        tb.appendChild(tr);
+      });
+      if(!rows.length) tb.innerHTML='<tr><td colspan="5" style="padding:8px;border:1px solid #ddd;color:#888">暂无记录</td></tr>';
+    }catch(e){
+      document.querySelector('#hist_table tbody').innerHTML='<tr><td colspan="5" style="padding:8px;border:1px solid #ddd;color:#c0392b">加载失败: '+e+'</td></tr>';
+    }
+  } else { box.style.display='none'; }
+};
 
 // ---------- 比例调整预测(表格) ----------
 // 类别分组: 同类基金的调整后市值合并算比例
@@ -479,7 +562,7 @@ function buildSimTable(){
   const codeGroup = {};
   SIM_GROUPS.forEach(g=>g.codes.forEach(c=>codeGroup[c]=g.name));
   const groupOrder = SIM_GROUPS.map(g=>g.name).concat(['其他']);
-  const rows = simPositions.map(p=>({p, group: codeGroup[p.code]||'其他'}));
+  const rows = simPositions.map(p=>({p, group: codeGroup[p.code]||simGroupOf(p.code, p.name)}));
   rows.sort((a,b)=>groupOrder.indexOf(a.group)-groupOrder.indexOf(b.group));
   const groupCount = {};
   rows.forEach(r=>{ groupCount[r.group]=(groupCount[r.group]||0)+1; });
