@@ -250,6 +250,16 @@ def sim_alloc_set(payload):
     conn.close()
 
 
+def holdings_after(code, after_date):
+    """某日期之后(不含)录入的持仓变化 [(hdate, action, qty)] — 供当前持仓补计。"""
+    conn = _conn(DZ_DB)
+    rows = conn.execute(
+        "SELECT hdate, action, qty FROM holdings WHERE sec_code=? AND hdate>? ORDER BY hdate",
+        (code, after_date)).fetchall()
+    conn.close()
+    return [(norm_date(r[0]), r[1], r[2]) for r in rows]
+
+
 def holding_add(date, code, action, qty, price):
     conn = _conn(DZ_DB)
     conn.execute(

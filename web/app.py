@@ -38,6 +38,7 @@ def api_positions():
     if not daily:
         return jsonify({"ok": False, "error": "无数据"})
     last = daily[-1]
+    last_d = last["d"]
     rows = []
     for code in FUNDS:
         navs = db.nav_all(code)
@@ -45,8 +46,19 @@ def api_positions():
         price = float(prices[-1][1]) if prices else None
         nav = float(navs[-1][1]) if navs else None
         pos = (last.get("pos") or {}).get(code, 0)
+        # 曲线末日之后录入的持仓变化(如今日买入)也计入当前持仓
+        for hd, haction, hqty in db.holdings_after(code, last_d):
+            try:
+                hq = float(hqty) or 0.0
+            except (TypeError, ValueError):
+                continue
+            pos = pos + hq if haction == "BUY" else pos - hq
+        # 交易价缺失时回退净值(与 calcs 市值规则一致)
+        price_used, price_date = price, (prices[-1][0] if prices else None)
+        if price_used is None and nav is not None:
+            price_used, price_date = nav, (navs[-1][0] if navs else None)
         rows.append({"code": code, "name": FUNDS[code], "pos": pos,
-                     "price": price, "price_date": prices[-1][0] if prices else None,
+                     "price": price_used, "price_date": price_date,
                      "nav": nav, "nav_date": navs[-1][0] if navs else None})
     return jsonify({"ok": True, "date": last["d"], "positions": rows})
 
