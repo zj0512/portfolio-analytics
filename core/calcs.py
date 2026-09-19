@@ -118,10 +118,11 @@ def _period_return_series(daily, flows, gran):
         prev_mv = None
         for p in daily:
             ret = None
+            gain = None
             if prev_mv and prev_mv > 0:
                 gain = p["mv"] - prev_mv + flow_by_date.get(p["d"], 0.0)
                 ret = round(gain / prev_mv * 100, 2)
-            out.append({"d": p["d"], "label": p["d"], "ret": ret})
+            out.append({"d": p["d"], "label": p["d"], "ret": ret, "gain": None if gain is None else round(gain, 2)})
             prev_mv = p["mv"]
         return out
     groups, order = {}, []
@@ -139,9 +140,11 @@ def _period_return_series(daily, flows, gran):
         mv_end = pts[-1]["mv"]
         sflow = sum(v for dd, v in flow_by_date.items() if d1 <= dd <= dk)
         ret = None
+        gain = None
         if prev_mv > 0:
-            ret = round((mv_end - prev_mv + sflow) / prev_mv * 100, 2)
-        out.append({"d": dk, "label": k[1:] if k.startswith("W") else k, "ret": ret})
+            gain = mv_end - prev_mv + sflow
+            ret = round(gain / prev_mv * 100, 2)
+        out.append({"d": dk, "label": k[1:] if k.startswith("W") else k, "ret": ret, "gain": None if gain is None else round(gain, 2)})
         prev_mv = mv_end
     return out
 

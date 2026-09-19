@@ -83,6 +83,7 @@
     <span class="pgran-btn range-btn" data-gran="quarter">季</span>
     <span class="pgran-btn range-btn" data-gran="year">年</span>
   </div>
+  <div id="pret_latest" style="margin-bottom:6px;font-size:13px;color:#555"></div>
   <div class="chart" id="pret" style="height:360px"></div>
 </div>
 
@@ -388,6 +389,14 @@ function renderPret(){
   const s = (lastPret.series||[]).filter(p=>pretInRange(p.d));
   const b = (lastPret.bench||[]).filter(p=>pretInRange(p.d));
   if(!s.length && !b.length) return;
+  // 最新一个有效周期的涨跌绝对值(市值法, 含现金流调整)
+  const lastPt = [...s].reverse().find(p=>p.ret!=null);
+  const el = document.getElementById('pret_latest');
+  if(lastPt){
+    const up = lastPt.ret>=0;
+    el.innerHTML = '最新周期('+lastPt.label+'): <b style="color:'+(up?'#c0392b':'#27ae60')+'">'+(up?'+':'')+fmtNum(lastPt.gain,2)+' 元</b>'
+      + ' <span style="color:'+(up?'#c0392b':'#27ae60')+'">('+(up?'+':'')+lastPt.ret+'%)</span>';
+  } else { el.textContent=''; }
   if(!pretChart) pretChart=echarts.init(document.getElementById('pret'));
   const xs = s.length?s.map(p=>p.label||p.d):b.map(p=>p.label||p.d);
   pretChart.setOption({
