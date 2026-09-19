@@ -162,11 +162,11 @@ def fund_flows_trades(code):
             o = float(occur) if occur else 0.0
         except (TypeError, ValueError):
             continue
-        if o == 0:
-            continue
         dd = norm_date(d)
-        flows.append((dd, o))
-        trades.append((dd, p, q, o))
+        if o != 0:
+            flows.append((dd, o))
+        if o != 0 or q > 0:
+            trades.append((dd, p, q, o))   # occur=0且qty>0 = 份额拆分/送份额
     for hd, haction, hqty, hprice in holds:
         try:
             hq = float(hqty) if hqty else 0.0

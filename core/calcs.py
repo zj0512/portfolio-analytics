@@ -224,6 +224,9 @@ def compute_daily(codes=None, gran="day"):
         for code, p, q, o in trade_by_date.get(dd, []):
             if o < 0:
                 pos[code] += q
+            elif o == 0:
+                if q > 0:
+                    pos[code] += q   # 份额拆分/送份额: 零成本份额增加(价格同步除权)
             else:
                 if p > 0 and q > 0:
                     pos[code] -= q
@@ -358,6 +361,9 @@ def compute_fund_daily(code, gran="day"):
         for p, q, o in trade_by_date.get(dd, []):
             if o < 0:
                 pos += q
+            elif o == 0:
+                if q > 0:
+                    pos += q   # 份额拆分/送份额: 零成本份额增加(价格同步除权)
             else:
                 if p > 0 and q > 0:
                     pos -= q
