@@ -189,11 +189,7 @@ def fetch_us10y():
 
 def fetch_a_amount():
     """沪深两市合计成交额(亿元): qt 实时行情成交额字段(收盘后为全天值, 万元)。
-    交易日 15:00 前为盘中累计值, 不返回, 避免半截数据落库。"""
-    import datetime as _dt
-    now = _dt.datetime.now()
-    if now.weekday() < 5 and _dt.time(0, 0) <= now.time() < _dt.time(15, 0):
-        return None
+    盘中返回的是当日累计值, 落库时由 run_all 特殊处理。"""
     try:
         t = _http("https://qt.gtimg.cn/q=sh000001,sz399001", timeout=4)
         total = 0.0
@@ -435,6 +431,12 @@ def remove_monitor(mid):
 
 # ---------- 每日评估主流程 ----------
 
+def _intraday_now():
+    """当前是否处于 A 股交易时段内(工作日 9:15-15:00)。"""
+    n = datetime.now()
+    return n.weekday() < 5 and datetime.strptime("09:15", "%H:%M").time() <= n.time() < datetime.strptime("15:00", "%H:%M").time()
+
+
 def run_all(date=None):
     """逐项取数+评估+落库, 返回结果列表。"""
     ensure_tables()
@@ -467,6 +469,14 @@ def run_all(date=None):
                 status, note = m["evaluate"](value, params)
             except Exception:
                 status, note = "neutral", "评估异常，原值保留"
+        # 盘中累计型指标(两市成交额): 显示盘中值但不落库, 避免半截数据污染历史/均值
+        if value is not None and mid == "A_AMOUNT" and _intraday_now():
+            status = "neutral"
+            note = "盘中累计值，收盘后更新为全天值"
+            out.append({"id": mid, "name": m["name"], "group": m["group"], "unit": m["unit"],
+                        "value": value, "status": status, "note": note, "date": d,
+                        "desc": m["desc"], "src": src})
+            continue
         save_snapshot(d, mid, value, status, note if value is not None else "数据源未取到(可手动录入)")
         out.append({"id": mid, "name": m["name"], "group": m["group"], "unit": m["unit"],
                     "value": value, "status": status, "note": note, "date": d,
