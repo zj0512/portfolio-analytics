@@ -188,7 +188,12 @@ def fetch_us10y():
 
 
 def fetch_a_amount():
-    """沪深两市合计成交额(亿元): qt 实时行情成交额字段(收盘后为全天值, 万元)。"""
+    """沪深两市合计成交额(亿元): qt 实时行情成交额字段(收盘后为全天值, 万元)。
+    交易日 15:00 前为盘中累计值, 不返回, 避免半截数据落库。"""
+    import datetime as _dt
+    now = _dt.datetime.now()
+    if now.weekday() < 5 and _dt.time(0, 0) <= now.time() < _dt.time(15, 0):
+        return None
     try:
         t = _http("https://qt.gtimg.cn/q=sh000001,sz399001", timeout=4)
         total = 0.0
@@ -491,8 +496,19 @@ def load_today(date=None, allow_fetch=False):
                             "src": "manual" if m["custom"] else "fetch"})
             else:
                 out.append({"id": mid, "name": m["name"], "group": m["group"],
-                            "status": "off", "note": "已停用", "value": None})
+                            "unit": m["unit"], "status": "nodata",
+                            "note": "等待晚间定时评估", "value": None,
+                            "date": d, "desc": m["desc"],
+                            "src": "fetch" if not m["custom"] else "manual"})
         return out
+    if not allow_fetch:
+        # 首次打开页面且当天尚无快照: 不做网络请求, 等待 21:30 定时评估
+        return [{"id": mid, "name": MONITORS[mid]["name"], "group": MONITORS[mid]["group"],
+                 "unit": MONITORS[mid]["unit"], "status": "nodata",
+                 "note": "今日尚未评估, 等待 21:30 定时任务或手动 ⟳",
+                 "value": None, "date": d, "desc": MONITORS[mid]["desc"],
+                 "src": "fetch" if not MONITORS[mid]["custom"] else "manual"}
+                for mid in ORDER]
     return run_all(d)
 
 
