@@ -485,7 +485,8 @@ def run_all(date=None):
 
 
 def load_today(date=None, allow_fetch=False):
-    """优先返回当日已落库快照; 无则 allow_fetch=True 时现算, 否则空。"""
+    """优先返回当日已落库快照; 无则现算并落库(盘中累计型指标除外)。
+    用户要求: 页面首次打开当天无快照时也应抓取展示, 不能一直空白。"""
     d = date or today()
     conn = _conn()
     rows = conn.execute(
@@ -511,14 +512,6 @@ def load_today(date=None, allow_fetch=False):
                             "date": d, "desc": m["desc"],
                             "src": "fetch" if not m["custom"] else "manual"})
         return out
-    if not allow_fetch:
-        # 首次打开页面且当天尚无快照: 不做网络请求, 等待 21:30 定时评估
-        return [{"id": mid, "name": MONITORS[mid]["name"], "group": MONITORS[mid]["group"],
-                 "unit": MONITORS[mid]["unit"], "status": "nodata",
-                 "note": "今日尚未评估, 等待 21:30 定时任务或手动 ⟳",
-                 "value": None, "date": d, "desc": MONITORS[mid]["desc"],
-                 "src": "fetch" if not MONITORS[mid]["custom"] else "manual"}
-                for mid in ORDER]
     return run_all(d)
 
 
