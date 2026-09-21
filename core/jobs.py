@@ -7,6 +7,7 @@ import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from . import fetchers
+from . import monitors
 from .config import FUNDS
 
 log = logging.getLogger("portfolio.scheduler")
@@ -25,6 +26,16 @@ def _daily_sync_job():
         log.info("定时净值/成交价更新完成")
     except Exception as e:
         log.error("定时净值更新失败: %s", e)
+
+
+def _monitor_job():
+    """定时任务: 投资分析监控评估并落库。"""
+    try:
+        res = monitors.run_all()
+        s = monitors.summary(res)
+        log.info("监控评估完成: %s", s)
+    except Exception as e:
+        log.error("监控评估失败: %s", e)
 
 
 def register_jobs(scheduler):
@@ -51,6 +62,18 @@ def register_jobs(scheduler):
     )
     log.info("已注册定时任务: 工作日 21:02 晚间补跑净值更新")
     log.info("已注册定时任务: 工作日15:02 更新净值")
+    # 投资分析监控: 21:30 净值/价格同步后评估
+    scheduler.add_job(
+        _monitor_job,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour=21,
+        minute=30,
+        id="monitor_daily",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    log.info("已注册定时任务: 工作日21:30 投资分析监控评估")
     # 成交价与净值同频更新(15:02/21:02), 逐日累积入 fund_price 表
     # (已并入 _daily_sync_job)
 

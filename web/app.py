@@ -3,7 +3,7 @@
 from flask import Flask, jsonify, request, send_from_directory
 from flask_compress import Compress
 
-from core import calcs, db, fetchers, sim_alloc
+from core import calcs, db, fetchers, sim_alloc, monitors
 from core import config
 from core.config import STATIC, FUNDS, DEFAULT_FUND, PORT
 from core.dates import today
@@ -174,6 +174,69 @@ def api_sim_targets_post():
                 pass
     db.sim_targets_set(clean)
     return jsonify({"ok": True, "saved": clean})
+
+
+@app.route("/api/monitors")
+def api_monitors():
+    """监控面板: 默认读当日已落库快照(秒开); refresh=1 时现场重算。"""
+    monitors.ensure_tables()
+    refresh = request.args.get("refresh") == "1"
+    results = monitors.load_today(allow_fetch=refresh)
+    hist = {}
+    for mid in monitors.ORDER:
+        h = monitors.snapshot_history(mid, 30)
+        if h:
+            hist[mid] = h
+    return jsonify({"ok": True, "date": results[0].get("date") if results else None,
+                    "results": results, "summary": monitors.summary(results),
+                    "history": hist})
+
+
+@app.route("/api/monitor_config", methods=["GET"])
+def api_monitor_config_get():
+    monitors.ensure_tables()
+    cfg = {}
+    for mid in monitors.ORDER:
+        enabled, params = monitors.get_config(mid)
+        cfg[mid] = {"enabled": enabled, "params": params,
+                    "name": monitors.MONITORS[mid]["name"],
+                    "defaults": monitors.MONITORS[mid]["defaults"],
+                    "custom": monitors.MONITORS[mid]["custom"],
+                    "desc": monitors.MONITORS[mid]["desc"]}
+    return jsonify({"ok": True, "config": cfg})
+
+
+@app.route("/api/monitor_config", methods=["POST"])
+def api_monitor_config_post():
+    """启停/阈值/手动值: {id, enabled?, params?}。"""
+    body = request.get_json(force=True)
+    mid = (body.get("id") or "").strip()
+    if mid not in monitors.MONITORS:
+        return jsonify({"ok": False, "error": "unknown monitor"})
+    monitors.set_config(mid, enabled=body.get("enabled"), params=body.get("params"))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/monitor_custom", methods=["POST"])
+def api_monitor_custom():
+    """新增/删除自定义手动指标: {action:'add'|'remove', id, name?, group?, unit?, warn_at?, op?, act?}"""
+    body = request.get_json(force=True)
+    action = body.get("action")
+    mid = (body.get("id") or "").strip()
+    if action == "add":
+        import re as _re
+        if not _re.match(r"^[A-Za-z0-9_]{2,20}$", mid):
+            return jsonify({"ok": False, "error": "id 需为2-20位字母数字下划线"})
+        name = (body.get("name") or "").strip()
+        if not name:
+            return jsonify({"ok": False, "error": "缺少名称"})
+        ok = monitors.add_manual_monitor(mid, name, body.get("group"), body.get("unit"),
+                                         body.get("warn_at"), body.get("op", "gt"), body.get("act", "warn"))
+        return jsonify({"ok": ok, "error": None if ok else "id 已存在"})
+    if action == "remove":
+        ok = monitors.remove_monitor(mid)
+        return jsonify({"ok": ok, "error": None if ok else "内置指标只能停用不能删除"})
+    return jsonify({"ok": False, "error": "bad action"})
 
 
 @app.route("/api/sync", methods=["POST"])

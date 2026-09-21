@@ -31,6 +31,32 @@
  .funds{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
  .fund-btn{padding:6px 12px;border:1px solid #ddd;border-radius:20px;cursor:pointer;font-size:13px;background:#fff}
  .fund-btn.active{background:#c0392b;color:#fff;border-color:#c0392b}
+ /* 投资分析监控 */
+ .mon-sum{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:13px}
+ .mon-sum .dot{width:14px;height:14px;border-radius:50%;display:inline-block;vertical-align:-2px;margin-right:4px}
+ .mon-groups{display:flex;flex-direction:column;gap:14px}
+ .mon-group-title{font-size:13px;color:#888;margin-bottom:6px}
+ .mon-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+ .mon-item{border:1px solid #e5e5e5;border-radius:8px;padding:10px 12px;display:flex;gap:10px;align-items:flex-start;background:#fff}
+ .mon-item .dot{width:12px;height:12px;border-radius:50%;margin-top:5px;flex:none}
+ .mon-item .nm{font-weight:bold;font-size:13px}
+ .mon-item .val{font-size:16px;font-weight:bold;margin:2px 0;color:#c0392b}
+ .mon-item .note{font-size:12px;color:#666;line-height:1.5}
+ .mon-item .meta{font-size:11px;color:#aaa;margin-top:3px}
+ .mon-item.off{opacity:.45}
+ .mon-act{margin-top:12px;padding:10px 12px;background:#fff8e6;border:1px solid #f0dfa8;border-radius:8px;font-size:13px}
+ .mon-act div{margin:3px 0}
+ .mon-tools{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+ .mon-tools button{padding:5px 12px;border:1px solid #ddd;border-radius:6px;background:#fff;cursor:pointer;font-size:12px}
+ .mon-tools button:hover{background:#f0f0f0}
+ .mon-dlg{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:99}
+ .mon-dlg>div{background:#fff;border-radius:10px;padding:18px;max-width:560px;width:92%;max-height:80vh;overflow:auto}
+ .mon-dlg h3{margin:0 0 10px;font-size:15px}
+ .mon-dlg .row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #f2f2f2;font-size:13px;gap:8px}
+ .mon-dlg input[type=text],.mon-dlg input[type=number],.mon-dlg select{padding:5px 7px;border:1px solid #ddd;border-radius:5px;font-size:13px}
+ .mon-dlg .btns{margin-top:12px;display:flex;gap:8px;justify-content:flex-end}
+ .mon-dlg .btns button{padding:6px 14px;border:none;border-radius:6px;cursor:pointer;font-size:13px}
+ .mon-spark{display:inline-block;vertical-align:middle;margin-left:6px}
 </style>
 </head>
 <body>
@@ -727,5 +753,143 @@ fetchAndRender();
   <div id="sim_msg" style="font-size:12px;color:#555;margin-top:6px"></div>
 </div>
 
+<div class="card" id="mon_card">
+  <h2 style="font-size:16px;margin:0 0 4px">投资分析监控</h2>
+  <div class="sub" id="mon_date" style="margin-bottom:8px">加载中...</div>
+  <div class="mon-sum" id="mon_sum"></div>
+  <div class="mon-tools">
+    <button onclick="monRefresh(true)">⟳ 立即评估</button>
+    <button onclick="monCfgOpen()">⚙ 阈值/启停管理</button>
+    <button onclick="monAddOpen()">＋ 新增手动指标</button>
+  </div>
+  <div class="mon-groups" id="mon_groups"></div>
+  <div class="mon-act" id="mon_act" style="display:none"></div>
+</div>
+
+<script>
+// ================= 投资分析监控 =================
+const MON_COLORS={good:'#27ae60',neutral:'#95a5a6',warn:'#f39c12',act_good:'#2980b9',act_warn:'#c0392b',nodata:'#7f8c8d',off:'#bdc3c7'};
+const MON_LABELS={good:'利好',neutral:'中性',warn:'预警',act_good:'行动-机会',act_warn:'行动-红线',nodata:'数据缺失',off:'停用'};
+let MON_DATA=null;
+
+function monSpark(hist){
+  if(!hist||hist.length<2) return '';
+  const vs=hist.map(h=>h.v),mn=Math.min(...vs),mx=Math.max(...vs);
+  if(mx===mn) return '';
+  const w=70,h=18,pts=vs.map((v,i)=>[(i/(vs.length-1))*w,h-((v-mn)/(mx-mn))*h].map(x=>x.toFixed(1)).join(',')).join(' ');
+  return '<svg class="mon-spark" width="'+w+'" height="'+h+'"><polyline points="'+pts+'" fill="none" stroke="#888" stroke-width="1.2"/></svg>';
+}
+
+async function monRefresh(force){
+  try{
+    const d=await fetch('/api/monitors'+(force?'?refresh=1':'')).then(r=>r.json());
+    if(!d.ok){document.getElementById('mon_date').textContent='加载失败';return;}
+    MON_DATA=d;
+    document.getElementById('mon_date').textContent='数据截至 '+d.date;
+    const s=d.summary.counts,parts=[];
+    const ord=['act_warn','act_good','warn','good','neutral','nodata','off'];
+    for(const k of ord){ if(s[k]) parts.push('<span class="dot" style="background:'+MON_COLORS[k]+'"></span>'+MON_LABELS[k]+' '+s[k]); }
+    document.getElementById('mon_sum').innerHTML='<b>整体：</b>'+parts.join('　');
+    const groups={};
+    for(const r of d.results){ (groups[r.group]=groups[r.group]||[]).push(r); }
+    let html='';
+    for(const g in groups){
+      html+='<div><div class="mon-group-title">— '+g+' —</div><div class="mon-grid">';
+      for(const r of groups[g]){
+        const c=MON_COLORS[r.status]||'#999';
+        const val=r.value==null?'—':(r.value+(r.unit||''));
+        html+='<div class="mon-item'+(r.status==='off'?' off':'')+'">'
+          +'<span class="dot" style="background:'+c+'" title="'+(MON_LABELS[r.status]||r.status)+'"></span>'
+          +'<div><div class="nm">'+r.name+(r.src==='manual'?' <span style="font-size:10px;color:#aaa">手动</span>':'')+'</div>'
+          +'<div class="val" style="color:'+(r.status==='neutral'?'#555':c)+'">'+val+'</div>'
+          +'<div class="note">'+(r.note||'')+'</div>'
+          +'<div class="meta">'+(MON_LABELS[r.status]||r.status)
+          +(d.history[r.id]&&d.history[r.id].length>1?' · 近'+d.history[r.id].length+'日'+monSpark(d.history[r.id]):'')+'</div></div></div>';
+      }
+      html+='</div></div>';
+    }
+    document.getElementById('mon_groups').innerHTML=html;
+    const acts=d.results.filter(r=>['act_warn','act_good','warn'].includes(r.status));
+    const actEl=document.getElementById('mon_act');
+    if(acts.length){
+      actEl.style.display='';
+      actEl.innerHTML='<b>⚠ 行动提醒</b>'+acts.map(r=>'<div><span style="color:'+MON_COLORS[r.status]+'">●</span> <b>'+r.name+'</b>：'+r.note+'</div>').join('');
+    } else actEl.style.display='none';
+  }catch(e){document.getElementById('mon_date').textContent='加载失败: '+e.message;}
+}
+
+function monDlg(html){
+  const w=document.createElement('div');w.className='mon-dlg';w.id='mon_dlg';
+  w.innerHTML='<div>'+html+'</div>';document.body.appendChild(w);
+  w.addEventListener('click',e=>{if(e.target===w)w.remove();});
+}
+
+async function monCfgOpen(){
+  try{
+    const d=await fetch('/api/monitor_config').then(r=>r.json());
+    if(!d.ok)return;
+    let html='<h3>监控项管理（启停 / 阈值 / 手动值）</h3>';
+    for(const id in d.config){
+      const c=d.config[id];
+      const p=c.params||{};
+      html+='<div class="row"><div style="flex:1"><b>'+(c.name||id)+'</b>'
+        +'<div style="font-size:11px;color:#bbb">'+id+'</div>'
+        +(c.desc?'<div style="font-size:11px;color:#999">'+c.desc+'</div>':'')+'</div>'
+        +'<label style="font-size:12px">启 <input type="checkbox" '+(c.enabled?'checked':'')+' onchange="monSet(\''+id+'\',{enabled:this.checked})"></label>';
+      for(const k in c.defaults){
+        const v=(p[k]!==undefined?p[k]:c.defaults[k]);
+        if(typeof c.defaults[k]==='number')
+          html+='<label style="font-size:12px">'+k+' <input type="number" step="any" style="width:70px" value="'+v+'" onchange="monSet(\''+id+'\',{params:{\''+k+'\':parseFloat(this.value)}})"></label>';
+      }
+      html+='<label style="font-size:12px">手动值 <input type="number" step="any" placeholder="值" style="width:70px" onchange="monManual(\''+id+'\',this.value)"></label>';
+      if(c.custom)html+='<button style="padding:3px 8px;border:none;border-radius:4px;background:#c0392b;color:#fff;cursor:pointer;font-size:11px" onclick="monRemove(\''+id+'\')">删除</button>';
+      html+='</div>';
+    }
+    html+='<div class="btns"><button onclick="document.getElementById(\'mon_dlg\').remove();monRefresh()">完成</button></div>';
+    monDlg(html);
+  }catch(e){alert('加载失败: '+e.message);}
+}
+
+async function monSet(id,body){
+  await fetch('/api/monitor_config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({id},body))});
+}
+
+async function monManual(id,v){
+  if(v===''||isNaN(parseFloat(v)))return;
+  await monSet(id,{params:{manual:parseFloat(v),manual_date:new Date().toISOString().slice(0,10)}});
+}
+
+async function monRemove(id){
+  if(!confirm('删除自定义指标 '+id+'？'))return;
+  await fetch('/api/monitor_custom',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'remove',id})});
+  monCfgOpen();monRefresh();
+}
+
+function monAddOpen(){
+  monDlg('<h3>新增手动监控指标</h3>'
+    +'<div class="row"><span>ID(字母数字)</span><input type="text" id="mon_add_id" placeholder="如 FISCAL_SIGNAL"></div>'
+    +'<div class="row"><span>名称</span><input type="text" id="mon_add_name" placeholder="如 财政刺激信号"></div>'
+    +'<div class="row"><span>分组</span><input type="text" id="mon_add_group" value="手动"></div>'
+    +'<div class="row"><span>单位</span><input type="text" id="mon_add_unit" placeholder="可空"></div>'
+    +'<div class="row"><span>触发阈值(数值,可空)</span><input type="number" step="any" id="mon_add_warn"></div>'
+    +'<div class="row"><span>触发条件</span><select id="mon_add_op"><option value="gt">大于</option><option value="lt">小于</option><option value="eq">等于</option></select></div>'
+    +'<div class="btns"><button onclick="document.getElementById(\'mon_dlg\').remove()">取消</button>'
+    +'<button style="background:#c0392b;color:#fff" onclick="monAddSubmit()">添加</button></div>');
+}
+
+async function monAddSubmit(){
+  const body={action:'add',id:document.getElementById('mon_add_id').value.trim(),
+    name:document.getElementById('mon_add_name').value.trim(),
+    group:document.getElementById('mon_add_group').value.trim()||'手动',
+    unit:document.getElementById('mon_add_unit').value.trim(),
+    warn_at:document.getElementById('mon_add_warn').value===''?null:parseFloat(document.getElementById('mon_add_warn').value),
+    op:document.getElementById('mon_add_op').value};
+  const r=await fetch('/api/monitor_custom',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(x=>x.json());
+  if(!r.ok){alert('失败: '+r.error);return;}
+  document.getElementById('mon_dlg').remove();monRefresh();
+}
+
+monRefresh();
+</script>
 </body>
 </html>
